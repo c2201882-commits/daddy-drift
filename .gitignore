@@ -1,0 +1,17 @@
+# Unused alternate model formats / previews from the Kenney asset packs —
+# only "GLB format" (city) and "GLTF format" (nature) are actually loaded.
+assets/city/Models/FBX format/
+assets/city/Models/OBJ format/
+assets/city/Previews/
+assets/city/Preview*.png
+assets/city/Sample.png
+assets/city/Overview.html
+
+assets/nature/Models/FBX format/
+assets/nature/Models/OBJ format/
+assets/nature/Models/DAE format/
+assets/nature/Models/STL format/
+assets/nature/Isometric/
+assets/nature/Side/
+assets/nature/Preview.png
+assets/nature/Sample.png

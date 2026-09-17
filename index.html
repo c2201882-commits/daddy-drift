@@ -1,0 +1,795 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<title>爹地漂流記</title>
+<style>
+  html, body { margin: 0; padding: 0; overflow: hidden; background: #87ceeb; font-family: sans-serif; }
+  #info {
+    position: fixed; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.5);
+    padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.6; z-index: 10;
+  }
+  #loading {
+    position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #fff; font-size: 20px; background: #222; z-index: 20;
+  }
+  #info { display: none; }
+  #startScreen {
+    position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 24px;
+    background: linear-gradient(180deg, #1b2a4a 0%, #0c1424 100%);
+  }
+  #startScreen h1 { color: #fff; font-size: 32px; margin: 0; letter-spacing: 4px; }
+  #startBtn {
+    padding: 16px 56px; font-size: 22px; font-weight: bold; letter-spacing: 4px;
+    color: #1b2a4a; background: #ffd54a; border: none; border-radius: 10px;
+    cursor: pointer; box-shadow: 0 6px 0 #c9a530; transition: transform 0.1s;
+  }
+  #startBtn:active { transform: translateY(4px); box-shadow: 0 2px 0 #c9a530; }
+  #startBtn:disabled { opacity: 0.6; cursor: default; }
+  #dialogBox {
+    position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
+    z-index: 25; display: none; background: rgba(20, 20, 30, 0.92); color: #fff;
+    padding: 22px 28px; border-radius: 12px; border: 2px solid #ffd54a;
+    max-width: 480px; width: 86%; text-align: center; font-size: 18px;
+  }
+  #dialogBox p { margin: 0 0 16px 0; line-height: 1.6; }
+  #dialogConfirm {
+    padding: 10px 36px; font-size: 16px; font-weight: bold; color: #1b2a4a;
+    background: #ffd54a; border: none; border-radius: 8px; cursor: pointer;
+  }
+  #questBanner {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 10;
+    color: #fff; background: rgba(0,0,0,0.55); padding: 8px 20px; border-radius: 8px;
+    font-size: 15px; display: none;
+  }
+  #foundOverlay {
+    position: fixed; inset: 0; z-index: 40; display: none; align-items: center;
+    justify-content: center; background: rgba(0,0,0,0.6);
+  }
+  #foundOverlay .card {
+    background: rgba(20, 20, 30, 0.95); color: #fff; padding: 32px 40px; border-radius: 14px;
+    border: 2px solid #ffd54a; text-align: center; max-width: 420px; width: 86%;
+  }
+  #foundOverlay h2 { margin: 0 0 12px 0; font-size: 26px; }
+  #foundOverlay p { margin: 0 0 20px 0; line-height: 1.6; }
+  #restartBtn {
+    padding: 10px 36px; font-size: 16px; font-weight: bold; color: #1b2a4a;
+    background: #ffd54a; border: none; border-radius: 8px; cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<div id="loading">載入模型中... 0%</div>
+<div id="startScreen">
+  <h1>爹地漂流記</h1>
+  <button id="startBtn">START</button>
+</div>
+<div id="dialogBox">
+  <p>要開始我們的旅程了嗎？</p>
+  <button id="dialogConfirm">確認</button>
+</div>
+<div id="questBanner">🔍 任務：在城市裡找到 Julie</div>
+<div id="foundOverlay">
+  <div class="card">
+    <h2>🎉 找到了！</h2>
+    <p>你成功找到了 Julie，任務完成！</p>
+    <button id="restartBtn">重新遊戲</button>
+  </div>
+</div>
+<div id="info">
+  W / S：前進、後退<br/>
+  A / D：左轉、右轉<br/>
+  Shift：跑步<br/>
+  滾輪：縮放
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// --- Scene setup ---
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87ceeb);
+scene.fog = new THREE.Fog(0x87ceeb, 50, 200);
+
+const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+// Starts high above the whole map for the opening cinematic (see the
+// game-state machine near the bottom); swaps to a normal follow cam once
+// gameplay begins.
+camera.position.set(0, 260, 0.01);
+camera.lookAt(0, 0, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
+document.body.appendChild(renderer.domElement);
+
+// --- Lights ---
+const hemi = new THREE.HemisphereLight(0xffffff, 0x444444, 1.2);
+scene.add(hemi);
+const dir = new THREE.DirectionalLight(0xffffff, 1.5);
+dir.position.set(10, 20, 10);
+dir.castShadow = true;
+dir.shadow.mapSize.set(2048, 2048);
+dir.shadow.camera.left = -30;
+dir.shadow.camera.right = 30;
+dir.shadow.camera.top = 30;
+dir.shadow.camera.bottom = -30;
+scene.add(dir);
+
+// --- Ground (grass beyond the city block) ---
+const groundGeo = new THREE.PlaneGeometry(480, 480);
+const groundMat = new THREE.MeshStandardMaterial({ color: 0x5b8a4a });
+const ground = new THREE.Mesh(groundGeo, groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = -0.02;
+ground.receiveShadow = true;
+scene.add(ground);
+
+// --- City block: road + sidewalks ---
+const roadMat = new THREE.MeshStandardMaterial({ color: 0x3a3a3a });
+const sidewalkMat = new THREE.MeshStandardMaterial({ color: 0xaaaaaa });
+const CITY_SIZE = 140; // half-width of the paved city block
+
+const road = new THREE.Mesh(new THREE.PlaneGeometry(CITY_SIZE * 2, CITY_SIZE * 2), roadMat);
+road.rotation.x = -Math.PI / 2;
+road.position.y = 0;
+road.receiveShadow = true;
+scene.add(road);
+
+// Lane markings down the middle of the two main streets
+const lineMat = new THREE.MeshStandardMaterial({ color: 0xffffff, emissive: 0x222222 });
+for (let i = -CITY_SIZE; i < CITY_SIZE; i += 4) {
+  const lineH = new THREE.Mesh(new THREE.PlaneGeometry(2, 0.3), lineMat);
+  lineH.rotation.x = -Math.PI / 2;
+  lineH.position.set(i + 1, 0.01, 0);
+  scene.add(lineH);
+  const lineV = new THREE.Mesh(new THREE.PlaneGeometry(0.3, 2), lineMat);
+  lineV.rotation.x = -Math.PI / 2;
+  lineV.position.set(0, 0.01, i + 1);
+  scene.add(lineV);
+}
+
+// Sidewalks bordering each city block (4 quadrants split by the cross streets)
+const STREET_HALF_WIDTH = 5;
+const sidewalkThickness = 0.15;
+
+// Native building models are only ~2-4 units tall (they're single-storey
+// Kenney kit pieces, ~2x2 footprint). Scaled up so buildings tower over the
+// 1.8m-tall character instead of being roughly the same size.
+const BUILDING_SCALE = 6;
+const SKYSCRAPER_SCALE = 9;
+const BUILDING_HALF_FOOTPRINT = BUILDING_SCALE;      // ~6
+const SKYSCRAPER_HALF_FOOTPRINT = SKYSCRAPER_SCALE;  // ~9
+
+// Buildings sit close to the road, leaving only a slim sidewalk strip
+// between the curb and the building fronts (instead of a deep plaza).
+const ROW_SETBACK = STREET_HALF_WIDTH + 3 + SKYSCRAPER_HALF_FOOTPRINT; // distance from street centerline to each row's baseline
+const ROWS_PER_SIDE = 8; // buildings packed side by side along each sidewalk edge — as many as fit
+// How far the paved sidewalk extends past the curb — just enough to cover
+// the building fronts, not a step further. Everything past this is grass,
+// and a matching invisible wall (see below) stops the player from walking
+// out into that open space around the ends of a building row.
+const SIDEWALK_DEPTH = (ROW_SETBACK + SKYSCRAPER_HALF_FOOTPRINT + 3) - STREET_HALF_WIDTH;
+
+function addSidewalkBlock(x, z, w, d) {
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, sidewalkThickness, d), sidewalkMat);
+  mesh.position.set(x, sidewalkThickness / 2, z);
+  mesh.receiveShadow = true;
+  mesh.castShadow = false;
+  scene.add(mesh);
+  return mesh;
+}
+// Each quadrant gets an L-shaped sidewalk (one strip facing each of the two
+// streets) instead of one giant square slab — this hugs just the buildings
+// and the road, leaving no vast open plaza behind the building rows.
+const rowLength = CITY_SIZE - STREET_HALF_WIDTH;
+[-1, 1].forEach((sx) => {
+  [-1, 1].forEach((sz) => {
+    // strip facing the horizontal (X) street: long in X, shallow in Z
+    addSidewalkBlock(
+      sx * (STREET_HALF_WIDTH + rowLength / 2),
+      sz * (STREET_HALF_WIDTH + SIDEWALK_DEPTH / 2),
+      rowLength, SIDEWALK_DEPTH
+    );
+    // strip facing the vertical (Z) street: shallow in X, long in Z
+    addSidewalkBlock(
+      sx * (STREET_HALF_WIDTH + SIDEWALK_DEPTH / 2),
+      sz * (STREET_HALF_WIDTH + rowLength / 2),
+      SIDEWALK_DEPTH, rowLength
+    );
+  });
+});
+
+// --- Buildings loaded from the Kenney "City Kit (Commercial)" pack (CC0) ---
+const BUILDING_FILES = [
+  'building-a.glb', 'building-b.glb', 'building-c.glb', 'building-d.glb',
+  'building-e.glb', 'building-f.glb', 'building-g.glb', 'building-h.glb',
+  'building-i.glb', 'building-j.glb', 'building-k.glb', 'building-l.glb',
+  'building-skyscraper-a.glb', 'building-skyscraper-b.glb',
+  'building-skyscraper-c.glb', 'building-skyscraper-d.glb',
+];
+const cityLoader = new GLTFLoader();
+const buildingCache = {};
+const colliders = []; // { minX, maxX, minZ, maxZ } world-space AABBs the player can't walk through
+
+const MODEL_SUBDIR = { city: 'GLB format', nature: 'GLTF format' };
+function loadBuildingModel(file, dir = 'city') {
+  const key = dir + '/' + file;
+  if (buildingCache[key]) return buildingCache[key];
+  const p = new Promise((resolve) => {
+    cityLoader.load(
+      `./assets/${dir}/Models/${MODEL_SUBDIR[dir]}/${file}`,
+      (gltf) => resolve(gltf.scene),
+      undefined,
+      () => resolve(null)
+    );
+  });
+  buildingCache[key] = p;
+  return p;
+}
+
+async function placeBuilding(file, x, z, rotationY, scale) {
+  const template = await loadBuildingModel(file);
+  if (!template) return;
+  const instance = template.clone(true);
+  instance.traverse((obj) => {
+    if (obj.isMesh) {
+      obj.castShadow = true;
+      obj.receiveShadow = true;
+    }
+  });
+  instance.rotation.y = rotationY;
+  instance.scale.setScalar(scale);
+  instance.position.set(x, 0, z);
+  scene.add(instance);
+
+  const box = new THREE.Box3().setFromObject(instance);
+  const margin = 0.3; // slight buffer so the player doesn't clip corners
+  colliders.push({
+    minX: box.min.x + margin, maxX: box.max.x - margin,
+    minZ: box.min.z + margin, maxZ: box.max.z - margin,
+  });
+  return box;
+}
+
+// --- Trees & benches (Kenney "Nature Kit", CC0, + a simple procedural bench) ---
+const TREE_FILES = ['tree_oak.glb', 'tree_pineTallA.glb', 'tree_detailed.glb', 'tree_fat.glb'];
+const TREE_SCALE = 2.2;
+
+function makeBench() {
+  const group = new THREE.Group();
+  const woodMat = new THREE.MeshStandardMaterial({ color: 0x8b5a2b });
+  const metalMat = new THREE.MeshStandardMaterial({ color: 0x333333 });
+  const seat = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.08, 0.5), woodMat);
+  seat.position.y = 0.45;
+  const back = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.5, 0.08), woodMat);
+  back.position.set(0, 0.7, -0.21);
+  group.add(seat, back);
+  [-0.6, 0.6].forEach((lx) => {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.45, 0.45), metalMat);
+    leg.position.set(lx, 0.22, 0);
+    group.add(leg);
+  });
+  group.traverse((obj) => { if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; } });
+  return group;
+}
+
+async function placeTree(file, x, z) {
+  const template = await loadBuildingModel(file, 'nature');
+  if (!template) return;
+  const instance = template.clone(true);
+  instance.traverse((obj) => { if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; } });
+  instance.scale.setScalar(TREE_SCALE);
+  instance.position.set(x, 0, z);
+  instance.rotation.y = Math.random() * Math.PI * 2;
+  scene.add(instance);
+}
+
+function placeBench(x, z, facingRotY) {
+  const bench = makeBench();
+  bench.position.set(x, 0, z);
+  bench.rotation.y = facingRotY;
+  scene.add(bench);
+}
+
+// Populates the sidewalk strip between the curb and a building row with
+// alternating trees/benches, spaced out and skipping the crosswalk gap
+// near the intersection. `fixedAxis`/`fixedSign` say which street edge this
+// is (e.g. fixedAxis 'z' = the horizontal street's north/south sidewalk,
+// fixedAxis 'x' = the vertical street's east/west sidewalk), so the same
+// logic furnishes both streets.
+function furnishSidewalk(fixedAxis, fixedSign) {
+  const offsetFromCurb = fixedSign * (STREET_HALF_WIDTH + 1.6);
+  const facingRotY = fixedAxis === 'z'
+    ? (fixedSign > 0 ? Math.PI : 0)
+    : (fixedSign > 0 ? -Math.PI / 2 : Math.PI / 2);
+  let toggle = 0;
+  for (let along = -(CITY_SIZE - 10); along <= CITY_SIZE - 10; along += 6) {
+    if (Math.abs(along) < STREET_HALF_WIDTH + 2) continue; // leave the crosswalk clear
+    const x = fixedAxis === 'z' ? along : offsetFromCurb;
+    const z = fixedAxis === 'z' ? offsetFromCurb : along;
+    if (toggle % 3 === 0) {
+      placeTree(TREE_FILES[Math.floor(Math.random() * TREE_FILES.length)], x, z);
+    } else if (toggle % 3 === 1) {
+      placeBench(x, z, facingRotY);
+    }
+    toggle++;
+  }
+}
+
+// Buildings are packed shoulder-to-shoulder: each new one is placed right
+// against the edge of the previous one instead of on a fixed grid, so mixing
+// narrow buildings and wide skyscrapers still looks tightly packed. A small
+// negative gap makes them overlap by a hair so there's never a visible seam
+// or a slit the player could squeeze through.
+const BUILDING_GAP = -0.3;
+
+// Fills one straight row of buildings lining a street edge. `fixedAxis`
+// picks which street this row faces ('z' = the horizontal street, so the
+// row is packed along X at a fixed Z; 'x' = the vertical street, packed
+// along Z at a fixed X). `fixedSign`/`packSign` pick which of the two sides
+// of that street, and which direction the row extends from the center.
+async function buildRow(fixedAxis, fixedSign, packSign) {
+  let fileIndex = Math.floor(Math.random() * BUILDING_FILES.length);
+  let offset = ROW_SETBACK;
+  const placements = [];
+  for (let row = 0; row < ROWS_PER_SIDE; row++) {
+    const file = BUILDING_FILES[fileIndex % BUILDING_FILES.length];
+    fileIndex++;
+    const isSkyscraper = file.includes('skyscraper');
+    const half = isSkyscraper ? SKYSCRAPER_HALF_FOOTPRINT : BUILDING_HALF_FOOTPRINT;
+    const centerOffset = offset + half;
+    const scale = isSkyscraper ? SKYSCRAPER_SCALE : BUILDING_SCALE;
+
+    let x, z, rotY;
+    if (fixedAxis === 'z') {
+      x = packSign * centerOffset;
+      z = fixedSign * ROW_SETBACK;
+      rotY = (fixedSign > 0 ? Math.PI : 0) + (packSign < 0 ? Math.PI : 0);
+    } else {
+      x = fixedSign * ROW_SETBACK;
+      z = packSign * centerOffset;
+      rotY = (fixedSign > 0 ? -Math.PI / 2 : Math.PI / 2) + (packSign < 0 ? Math.PI : 0);
+    }
+
+    placements.push(placeBuilding(file, x, z, rotY, scale));
+    offset = centerOffset + half + BUILDING_GAP;
+  }
+  return Promise.all(placements);
+}
+
+// The paved sidewalk is only an L-shaped strip hugging the two streets (see
+// SIDEWALK_DEPTH above); beyond it is open grass with nothing in it. Rather
+// than let the player wander out there, each quadrant's open interior is
+// sealed off with one big invisible collider — same mechanism as a building,
+// just without a mesh — so the walkable area stays limited to the road, the
+// sidewalk, and the buildings lining it.
+function sealQuadrantInterior(signX, signZ) {
+  const nearEdge = STREET_HALF_WIDTH + SIDEWALK_DEPTH;
+  const farEdge = CITY_SIZE;
+  const minX = signX > 0 ? nearEdge : -farEdge;
+  const maxX = signX > 0 ? farEdge : -nearEdge;
+  const minZ = signZ > 0 ? nearEdge : -farEdge;
+  const maxZ = signZ > 0 ? farEdge : -nearEdge;
+  colliders.push({ minX, maxX, minZ, maxZ });
+}
+
+async function buildCity() {
+  const jobs = [];
+  [1, -1].forEach((fixedSign) => {
+    [1, -1].forEach((packSign) => {
+      jobs.push(buildRow('z', fixedSign, packSign)); // rows facing the horizontal (X) street
+      jobs.push(buildRow('x', fixedSign, packSign)); // rows facing the vertical (Z) street
+    });
+  });
+  await Promise.all(jobs);
+
+  furnishSidewalk('z', 1);
+  furnishSidewalk('z', -1);
+  furnishSidewalk('x', 1);
+  furnishSidewalk('x', -1);
+
+  [1, -1].forEach((sx) => [1, -1].forEach((sz) => sealQuadrantInterior(sx, sz)));
+}
+buildCity();
+
+// --- Quest NPC: Julie, hidden somewhere out in the city ---
+// Placed well away from the player's spawn point (the intersection at the
+// origin), but on the clear sidewalk strip right along the curb — inside
+// the row-length span but at a shallow Z the building row never reaches
+// (buildings start at z >= ROW_SETBACK), so she's guaranteed reachable and
+// never boxed in by a building or the sealed-interior colliders.
+const NPC_POSITION = new THREE.Vector3(95, 0, STREET_HALF_WIDTH + 1.2);
+const FOUND_DISTANCE = 2.5;
+let npc = null;
+let npcFound = false;
+const npcMixers = [];
+
+const npcLoader = new GLTFLoader();
+npcLoader.load(
+  './model/julie.glb',
+  (gltf) => {
+    npc = gltf.scene;
+    npc.traverse((obj) => {
+      if (obj.isMesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+      }
+    });
+
+    const box = new THREE.Box3().setFromObject(npc);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const scale = 1.8 / (size.y || 1);
+    npc.scale.setScalar(scale);
+
+    const box2 = new THREE.Box3().setFromObject(npc);
+    npc.position.y -= box2.min.y;
+    npc.position.x = NPC_POSITION.x;
+    npc.position.z = NPC_POSITION.z;
+    npc.rotation.y = Math.PI; // face back toward the street/player
+    scene.add(npc);
+
+    if (gltf.animations && gltf.animations.length > 0) {
+      const npcMixer = new THREE.AnimationMixer(npc);
+      npcMixer.clipAction(gltf.animations[0]).play();
+      npcMixers.push(npcMixer);
+    }
+  },
+  undefined,
+  (err) => console.error('Failed to load julie.glb', err)
+);
+
+function checkQuestProgress() {
+  if (npcFound || !npc || !character) return;
+  const dx = character.position.x - NPC_POSITION.x;
+  const dz = character.position.z - NPC_POSITION.z;
+  if (Math.sqrt(dx * dx + dz * dz) < FOUND_DISTANCE) {
+    npcFound = true;
+    document.getElementById('foundOverlay').style.display = 'flex';
+  }
+}
+
+// --- Camera zoom ---
+// The gameplay camera is rigidly locked behind the character (see
+// updateCharacter's camera step below) — no free mouse-look — so all the
+// player can adjust is how far back/high it sits. Scroll wheel scales that
+// offset; it never rotates around the character.
+let camZoom = 1;
+const CAM_ZOOM_MIN = 0.5;
+const CAM_ZOOM_MAX = 2.2;
+window.addEventListener('wheel', (e) => {
+  if (gameState !== 'playing') return;
+  camZoom = THREE.MathUtils.clamp(camZoom + Math.sign(e.deltaY) * 0.08, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
+}, { passive: true });
+
+// --- Character ---
+// `character` is the root group: it owns world position + facing rotation.
+// `model` is the loaded mesh nested inside it: procedural walk-bob/sway/lean
+// gets applied only to `model`'s local transform, so it never fights with
+// the facing rotation or position logic below.
+let character = null;
+let model = null;
+let modelBaseY = 0;
+let hasSkeletalAnimation = false;
+let mixer = null;
+let actions = {};
+let currentAction = null;
+const clock = new THREE.Clock();
+
+// Resolves once `character` exists, so the opening cinematic (which needs a
+// character position to fly the camera toward) can wait on it even if the
+// player mashes START before the model has finished downloading.
+let resolveCharacterReady;
+const characterReady = new Promise((resolve) => { resolveCharacterReady = resolve; });
+
+const loadingEl = document.getElementById('loading');
+const loader = new GLTFLoader();
+loader.load(
+  './model/character.glb',
+  (gltf) => {
+    model = gltf.scene;
+    model.traverse((obj) => {
+      if (obj.isMesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+      }
+    });
+
+    // Normalize scale/position based on bounding box
+    const box = new THREE.Box3().setFromObject(model);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const height = size.y || 1;
+    const targetHeight = 1.8;
+    const scale = targetHeight / height;
+    model.scale.setScalar(scale);
+
+    // Recompute box after scale to sit on ground
+    const box2 = new THREE.Box3().setFromObject(model);
+    model.position.y -= box2.min.y;
+    modelBaseY = model.position.y;
+
+    character = new THREE.Group();
+    character.add(model);
+    scene.add(character);
+
+    // Animations
+    if (gltf.animations && gltf.animations.length > 0) {
+      mixer = new THREE.AnimationMixer(character);
+      gltf.animations.forEach((clip) => {
+        actions[clip.name] = mixer.clipAction(clip);
+      });
+      const names = Object.keys(actions);
+      console.log('Available animations:', names);
+
+      // Try to guess idle/walk/run clips by name, else fallback to first clips
+      const findByKeyword = (kw) => names.find(n => n.toLowerCase().includes(kw));
+      actions.idleName = findByKeyword('idle') || names[0];
+      actions.walkName = findByKeyword('walk') || names[Math.min(1, names.length - 1)];
+      actions.runName = findByKeyword('run') || actions.walkName;
+
+      playAction(actions.idleName);
+      hasSkeletalAnimation = true;
+    }
+
+    loadingEl.style.display = 'none';
+    resolveCharacterReady();
+  },
+  (xhr) => {
+    if (xhr.total) {
+      const pct = Math.round((xhr.loaded / xhr.total) * 100);
+      loadingEl.textContent = `載入模型中... ${pct}%`;
+    }
+  },
+  (err) => {
+    console.error('Failed to load model', err);
+    loadingEl.textContent = '模型載入失敗，請查看主控台';
+  }
+);
+
+function playAction(name, fade = 0.2) {
+  if (!name || !actions[name] || !(actions[name] instanceof THREE.AnimationAction)) return;
+  const next = actions[name];
+  if (currentAction === next) return;
+  next.reset().fadeIn(fade).play();
+  if (currentAction) currentAction.fadeOut(fade);
+  currentAction = next;
+}
+
+// --- Input ---
+const keys = {};
+window.addEventListener('keydown', (e) => { keys[e.code] = true; });
+window.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+let walkCycle = 0;
+
+// Procedural fake-walk for models with no skeleton/animation: bobs, sways
+// and leans the whole mesh in a stepping rhythm so it doesn't look like it's
+// gliding, since there's no rig to animate individual limbs.
+function applyProceduralWalk(delta, isMoving, running) {
+  if (!model || hasSkeletalAnimation) return;
+
+  const cycleSpeed = running ? 10 : 6;
+  const bobHeight = running ? 0.12 : 0.07;
+  const swayAmount = running ? 0.09 : 0.05;
+  const leanAmount = running ? 0.18 : 0.08;
+
+  if (isMoving) {
+    walkCycle += delta * cycleSpeed;
+  } else {
+    // ease back to neutral pose
+    walkCycle += (Math.round(walkCycle / Math.PI) * Math.PI - walkCycle) * Math.min(1, delta * 6);
+  }
+
+  const bounce = isMoving ? Math.abs(Math.sin(walkCycle)) * bobHeight : 0;
+  const sway = isMoving ? Math.sin(walkCycle) * swayAmount : 0;
+
+  model.position.y = modelBaseY + bounce;
+  model.rotation.z = sway;
+  const targetLean = isMoving ? THREE.MathUtils.degToRad(leanAmount * 10) : 0;
+  model.rotation.x = THREE.MathUtils.lerp(model.rotation.x, targetLean, Math.min(1, delta * 8));
+}
+
+const PLAYER_RADIUS = 0.35;
+
+// Moves the character by (dx, dz), sliding along building walls instead of
+// stopping dead: each axis is tested and applied independently against the
+// AABB colliders pushed by placeBuilding().
+function tryMove(dx, dz) {
+  const p = character.position;
+  const collides = (x, z) => colliders.some(c =>
+    x + PLAYER_RADIUS > c.minX && x - PLAYER_RADIUS < c.maxX &&
+    z + PLAYER_RADIUS > c.minZ && z - PLAYER_RADIUS < c.maxZ
+  );
+  if (!collides(p.x + dx, p.z)) p.x += dx;
+  if (!collides(p.x, p.z + dz)) p.z += dz;
+}
+
+// The sidewalk sits `sidewalkThickness` above the road like a real curb.
+// Returns how high the ground is under (x, z) so the character can step up
+// onto it instead of being visually buried up to the ankles. Matches the
+// L-shaped sidewalk strips built in buildCity: a thin band hugging each
+// street, not a full quadrant square.
+function groundHeightAt(x, z) {
+  const inHorizontalStrip = Math.abs(z) > STREET_HALF_WIDTH && Math.abs(z) < STREET_HALF_WIDTH + SIDEWALK_DEPTH;
+  const inVerticalStrip = Math.abs(x) > STREET_HALF_WIDTH && Math.abs(x) < STREET_HALF_WIDTH + SIDEWALK_DEPTH;
+  const onSidewalk = inHorizontalStrip || inVerticalStrip;
+  return onSidewalk ? sidewalkThickness : 0;
+}
+
+function updateCharacter(delta) {
+  if (!character || gameState !== 'playing') return;
+
+  const walkSpeed = 2.5;
+  const runSpeed = 8.5;
+  const turnSpeed = 3; // radians/sec, tank-style A/D turning
+
+  const forwardHeld = (keys['KeyW'] || keys['ArrowUp']) ? 1 : 0;
+  const backHeld = (keys['KeyS'] || keys['ArrowDown']) ? 1 : 0;
+  const turnLeftHeld = (keys['KeyA'] || keys['ArrowLeft']) ? 1 : 0;
+  const turnRightHeld = (keys['KeyD'] || keys['ArrowRight']) ? 1 : 0;
+  const running = keys['ShiftLeft'] || keys['ShiftRight'];
+
+  // Tank-style controls: A/D turn the character in place, W/S move along
+  // however it's currently facing. This sidesteps the strafe-relative-to-
+  // its-own-facing scheme tried earlier — turning the character to face its
+  // resultant strafe direction while that direction is itself defined
+  // relative to the character's current facing is a moving target (the
+  // "target" heading is always 90° away from wherever the character
+  // currently is), so it never converges and just spins in place forever.
+  // Turning explicitly via A/D has no such feedback loop.
+  const turnInput = turnRightHeld - turnLeftHeld;
+  if (turnInput !== 0) {
+    character.rotation.y -= turnInput * turnSpeed * delta;
+  }
+
+  const moveInput = forwardHeld - backHeld;
+  const isMoving = moveInput !== 0;
+
+  if (isMoving) {
+    const facingAngle = character.rotation.y;
+    const forward = new THREE.Vector3(Math.sin(facingAngle), 0, Math.cos(facingAngle));
+
+    const speed = running ? runSpeed : walkSpeed;
+    tryMove(forward.x * moveInput * speed * delta, forward.z * moveInput * speed * delta);
+
+    if (actions.walkName) {
+      playAction(running ? actions.runName : actions.walkName);
+    }
+  } else {
+    if (actions.idleName) playAction(actions.idleName);
+  }
+
+  // Step the character up onto the raised sidewalk curb (or back down onto
+  // the road) instead of leaving it sunk to its ankles in the pavement.
+  const targetGroundY = groundHeightAt(character.position.x, character.position.z);
+  character.position.y = THREE.MathUtils.lerp(character.position.y, targetGroundY, Math.min(1, delta * 12));
+
+  applyProceduralWalk(delta, isMoving, running);
+
+  // Camera stays rigidly behind the character: the offset is defined in the
+  // character's own local space (0, height, distance) and rotated by its
+  // current facing, so turning left/right (via movement, above) swings the
+  // camera around with it instead of leaving it to free mouse-look. Only
+  // camZoom (scroll wheel) scales how far back/up it sits.
+  // Base offset is (0, height, -distance): with rotation.y = 0 the character
+  // faces +Z (its rest pose), so -Z is directly behind it.
+  const behindOffset = new THREE.Vector3(0, 3, -6).multiplyScalar(camZoom)
+    .applyAxisAngle(new THREE.Vector3(0, 1, 0), character.rotation.y);
+  const desiredCamPos = character.position.clone().add(behindOffset);
+  camera.position.lerp(desiredCamPos, Math.min(1, delta * 8));
+  camera.lookAt(character.position.clone().add(new THREE.Vector3(0, 1.4, 0)));
+}
+
+// --- Resize ---
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// --- Opening cinematic: START button -> top-down-to-face camera fly-in ->
+// confirm dialog -> normal gameplay camera. `gameState` gates both input
+// (updateCharacter only runs once 'playing') and which camera code drives
+// the camera each frame, so the scripted cinematic and OrbitControls never
+// fight over camera.position in the same frame.
+let gameState = 'start'; // 'start' | 'intro' | 'dialog' | 'transitioning' | 'playing'
+const topDownCamPos = camera.position.clone(); // (0, 260, 0.01), set above
+const topDownLookAt = new THREE.Vector3(0, 0, 0);
+const INTRO_DURATION = 3.2;
+const TRANSITION_DURATION = 0.7;
+let introStart = 0;
+let transitionStart = 0;
+
+function easeInOutCubic(t) {
+  return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+}
+
+// The character's rest pose (rotation.y = 0, before any movement has turned
+// it) faces +Z, so "front view" — looking at its face — puts the camera on
+// the +Z side looking back toward -Z.
+function getFrontViewCamPos() { return character.position.clone().add(new THREE.Vector3(0, 1.6, 3.2)); }
+function getFrontViewLookAt() { return character.position.clone().add(new THREE.Vector3(0, 1.5, 0)); }
+function getGameplayCamPos() { return character.position.clone().add(new THREE.Vector3(0, 3, -6)); }
+function getGameplayLookAt() { return character.position.clone().add(new THREE.Vector3(0, 1.4, 0)); }
+
+function updateCinematicCamera() {
+  if (gameState === 'intro') {
+    const t = Math.min(1, (clock.elapsedTime - introStart) / INTRO_DURATION);
+    const e = easeInOutCubic(t);
+    camera.position.lerpVectors(topDownCamPos, getFrontViewCamPos(), e);
+    camera.lookAt(new THREE.Vector3().lerpVectors(topDownLookAt, getFrontViewLookAt(), e));
+    if (t >= 1) {
+      gameState = 'dialog';
+      document.getElementById('dialogBox').style.display = 'block';
+    }
+  } else if (gameState === 'transitioning') {
+    const t = Math.min(1, (clock.elapsedTime - transitionStart) / TRANSITION_DURATION);
+    const e = easeInOutCubic(t);
+    const endLookAt = getGameplayLookAt();
+    camera.position.lerpVectors(getFrontViewCamPos(), getGameplayCamPos(), e);
+    camera.lookAt(new THREE.Vector3().lerpVectors(getFrontViewLookAt(), endLookAt, e));
+    if (t >= 1) {
+      gameState = 'playing';
+      document.getElementById('info').style.display = 'block';
+      document.getElementById('questBanner').style.display = 'block';
+    }
+  }
+}
+
+const startBtn = document.getElementById('startBtn');
+startBtn.addEventListener('click', async () => {
+  startBtn.disabled = true;
+  startBtn.textContent = '載入中...';
+  await characterReady;
+  document.getElementById('startScreen').style.display = 'none';
+  introStart = clock.elapsedTime;
+  gameState = 'intro';
+});
+
+document.getElementById('dialogConfirm').addEventListener('click', () => {
+  document.getElementById('dialogBox').style.display = 'none';
+  transitionStart = clock.elapsedTime;
+  gameState = 'transitioning';
+});
+
+// Simplest reliable "reset everything" — reload the page from scratch
+// rather than trying to manually rewind every piece of scene/game state.
+// A cache-busting query string forces a real re-fetch instead of the
+// browser silently reusing whatever HTML it already has cached.
+document.getElementById('restartBtn').addEventListener('click', () => {
+  location.href = location.pathname + '?t=' + Date.now();
+});
+
+// --- Animate loop ---
+function animate() {
+  requestAnimationFrame(animate);
+  const delta = Math.min(clock.getDelta(), 0.1);
+
+  updateCharacter(delta);
+  updateCinematicCamera();
+  if (mixer) mixer.update(delta);
+  npcMixers.forEach((m) => m.update(delta));
+  if (gameState === 'playing') {
+    checkQuestProgress();
+  }
+
+  renderer.render(scene, camera);
+}
+animate();
+</script>
+</body>
+</html>
