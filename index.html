@@ -6,14 +6,61 @@
 <style>
   html, body { margin: 0; padding: 0; overflow: hidden; background: #87ceeb; font-family: sans-serif; }
   #info {
-    position: fixed; top: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.5);
-    padding: 10px 14px; border-radius: 8px; font-size: 14px; line-height: 1.6; z-index: 10;
+    position: fixed; bottom: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.5);
+    padding: 8px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5; z-index: 10;
+    display: none;
   }
   #loading {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
     color: #fff; font-size: 20px; background: #222; z-index: 20;
   }
-  #info { display: none; }
+  #questPanel {
+    position: fixed; top: 10px; left: 10px; z-index: 10; display: none;
+    background: rgba(0,0,0,0.55); color: #fff; border-radius: 10px; padding: 10px 14px;
+    min-width: 180px; font-size: 13px;
+  }
+  #questPanel h3 { margin: 0 0 6px 0; font-size: 13px; letter-spacing: 2px; opacity: 0.8; }
+  .quest-row {
+    padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; line-height: 1.4;
+  }
+  .quest-row.quest-available { background: rgba(255,213,74,0.18); cursor: pointer; }
+  .quest-row.quest-available:hover { background: rgba(255,213,74,0.32); }
+  .quest-row.quest-active { background: rgba(80,160,255,0.22); }
+  .quest-row.quest-completed { opacity: 0.55; text-decoration: line-through; }
+  .quest-row .quest-hint { display: block; font-size: 11px; opacity: 0.75; margin-top: 2px; }
+  #hud {
+    position: fixed; top: 10px; right: 10px; z-index: 10; display: none;
+    background: rgba(0,0,0,0.55); color: #fff; border-radius: 10px; padding: 10px 14px;
+    font-size: 13px; min-width: 160px;
+  }
+  #hpRow { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; }
+  #hpBarOuter { flex: 1; height: 12px; background: rgba(255,255,255,0.2); border-radius: 6px; overflow: hidden; }
+  #hpBarFill { height: 100%; background: linear-gradient(90deg,#ff5050,#ff8a50); width: 100%; transition: width 0.2s; }
+  #moneyRow { display: flex; align-items: center; gap: 6px; }
+  #mobileControls {
+    position: fixed; inset: 0; z-index: 15; display: none; pointer-events: none;
+  }
+  #mcMove {
+    position: absolute; left: 16px; bottom: 16px; pointer-events: auto;
+    display: flex; flex-direction: column; align-items: center; gap: 6px;
+  }
+  .mc-row { display: flex; gap: 6px; }
+  .mc-btn {
+    width: 58px; height: 58px; border-radius: 50%; border: none;
+    background: rgba(255,255,255,0.28); color: #fff; font-size: 22px;
+    touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  .mc-btn:active { background: rgba(255,255,255,0.5); }
+  #mcActions {
+    position: absolute; right: 16px; bottom: 16px; pointer-events: auto;
+    display: flex; flex-direction: column; gap: 10px; align-items: flex-end;
+  }
+  .mc-wide {
+    width: 104px; height: 50px; border-radius: 25px; border: none;
+    background: rgba(255,213,74,0.9); color: #1b2a4a; font-weight: bold;
+    font-size: 14px; touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  .mc-wide:active { background: rgba(255,213,74,1); }
   #startScreen {
     position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 24px;
@@ -38,11 +85,6 @@
     padding: 10px 36px; font-size: 16px; font-weight: bold; color: #1b2a4a;
     background: #ffd54a; border: none; border-radius: 8px; cursor: pointer;
   }
-  #questBanner {
-    position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 10;
-    color: #fff; background: rgba(0,0,0,0.55); padding: 8px 20px; border-radius: 8px;
-    font-size: 15px; display: none;
-  }
   #foundOverlay {
     position: fixed; inset: 0; z-index: 40; display: none; align-items: center;
     justify-content: center; background: rgba(0,0,0,0.6);
@@ -53,7 +95,26 @@
   }
   #foundOverlay h2 { margin: 0 0 12px 0; font-size: 26px; }
   #foundOverlay p { margin: 0 0 20px 0; line-height: 1.6; }
-  #restartBtn {
+  #foundConfirm {
+    padding: 10px 36px; font-size: 16px; font-weight: bold; color: #1b2a4a;
+    background: #ffd54a; border: none; border-radius: 8px; cursor: pointer;
+  }
+  #moneyDialog {
+    position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%);
+    z-index: 25; display: none; background: rgba(20, 20, 30, 0.92); color: #fff;
+    padding: 16px 32px; border-radius: 12px; border: 2px solid #ffd54a;
+    font-size: 20px; text-align: center;
+  }
+  #questIntroDialog {
+    position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
+    z-index: 25; display: none; background: rgba(20, 20, 30, 0.92); color: #fff;
+    padding: 22px 28px; border-radius: 12px; border: 2px solid #ffd54a;
+    max-width: 480px; width: 86%; text-align: center;
+  }
+  #questIntroDialog h3 { margin: 0 0 8px 0; font-size: 18px; }
+  #questIntroDialog p { margin: 0 0 16px 0; line-height: 1.6; font-size: 15px; }
+  #questPortrait { display: block; margin: 0 auto 10px; border-radius: 50%; background: #2a3a55; }
+  #questDialogConfirm {
     padding: 10px 36px; font-size: 16px; font-weight: bold; color: #1b2a4a;
     background: #ffd54a; border: none; border-radius: 8px; cursor: pointer;
   }
@@ -69,19 +130,52 @@
   <p>要開始我們的旅程了嗎？</p>
   <button id="dialogConfirm">確認</button>
 </div>
-<div id="questBanner">🔍 任務：在城市裡找到 Julie</div>
+<div id="questPanel">
+  <h3>任務</h3>
+  <div id="questList"></div>
+</div>
+<div id="hud">
+  <div id="hpRow">
+    <span>❤️</span>
+    <div id="hpBarOuter"><div id="hpBarFill"></div></div>
+    <span id="hpText">100/100</span>
+  </div>
+  <div id="moneyRow">💰 <span id="moneyText">$0</span></div>
+</div>
 <div id="foundOverlay">
   <div class="card">
     <h2>🎉 找到了！</h2>
     <p>你成功找到了 Julie，任務完成！</p>
-    <button id="restartBtn">重新遊戲</button>
+    <button id="foundConfirm">確認</button>
   </div>
+</div>
+<div id="moneyDialog">爹地好開心</div>
+<div id="questIntroDialog">
+  <canvas id="questPortrait" width="120" height="120"></canvas>
+  <h3 id="questDialogTitle"></h3>
+  <p id="questDialogText"></p>
+  <button id="questDialogConfirm">確認</button>
 </div>
 <div id="info">
   W / S：前進、後退<br/>
   A / D：左轉、右轉<br/>
   Shift：跑步<br/>
+  F：灑錢<br/>
   滾輪：縮放
+</div>
+<div id="mobileControls">
+  <div id="mcMove">
+    <button id="mcUp" class="mc-btn">▲</button>
+    <div class="mc-row">
+      <button id="mcLeft" class="mc-btn">◀</button>
+      <button id="mcDown" class="mc-btn">▼</button>
+      <button id="mcRight" class="mc-btn">▶</button>
+    </div>
+  </div>
+  <div id="mcActions">
+    <button id="mcRun" class="mc-btn mc-wide">跑步</button>
+    <button id="mcThrow" class="mc-btn mc-wide">💸 灑錢</button>
+  </div>
 </div>
 
 <script type="importmap">
@@ -96,6 +190,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { clone as cloneSkinned } from 'three/addons/utils/SkeletonUtils.js';
 
 // --- Scene setup ---
 const scene = new THREE.Scene();
@@ -386,6 +481,12 @@ function sealQuadrantInterior(signX, signZ) {
   colliders.push({ minX, maxX, minZ, maxZ });
 }
 
+// Resolves once every building/collider from buildCity() is in place, so
+// anything that needs to pick a random *reachable* spot (the quest NPC,
+// coin/pill pickups) can wait on the full collider list existing first.
+let resolveCityReady;
+const cityReady = new Promise((resolve) => { resolveCityReady = resolve; });
+
 async function buildCity() {
   const jobs = [];
   [1, -1].forEach((fixedSign) => {
@@ -402,20 +503,371 @@ async function buildCity() {
   furnishSidewalk('x', -1);
 
   [1, -1].forEach((sx) => [1, -1].forEach((sz) => sealQuadrantInterior(sx, sz)));
+
+  placeParkedCars();
+  initPickups();
+
+  resolveCityReady();
 }
 buildCity();
 
-// --- Quest NPC: Julie, hidden somewhere out in the city ---
-// Placed well away from the player's spawn point (the intersection at the
-// origin), but on the clear sidewalk strip right along the curb — inside
-// the row-length span but at a shallow Z the building row never reaches
-// (buildings start at z >= ROW_SETBACK), so she's guaranteed reachable and
-// never boxed in by a building or the sealed-interior colliders.
-const NPC_POSITION = new THREE.Vector3(95, 0, STREET_HALF_WIDTH + 1.2);
-const FOUND_DISTANCE = 2.5;
+// --- Reachability helpers ---
+// A point is "reachable" if it isn't inside any collider (buildings, the
+// sealed-off quadrant interiors, parked cars) and is within the paved city
+// bounds. Used to scatter the quest NPC and pickups only where the player
+// can actually walk.
+function isReachable(x, z, margin) {
+  if (Math.abs(x) > CITY_SIZE - 2 || Math.abs(z) > CITY_SIZE - 2) return false;
+  return !colliders.some((c) =>
+    x + margin > c.minX && x - margin < c.maxX &&
+    z + margin > c.minZ && z - margin < c.maxZ
+  );
+}
+
+function getRandomReachablePosition(margin = 0.6, avoid = null) {
+  for (let i = 0; i < 300; i++) {
+    const x = (Math.random() * 2 - 1) * (CITY_SIZE - 2);
+    const z = (Math.random() * 2 - 1) * (CITY_SIZE - 2);
+    if (avoid && Math.hypot(x - avoid.x, z - avoid.z) < avoid.radius) continue;
+    if (isReachable(x, z, margin)) return { x, z };
+  }
+  return { x: 0, z: STREET_HALF_WIDTH + 2 }; // fallback: just off the spawn crosswalk
+}
+
+// --- Cars (simple procedural models — body + tinted cabin + wheels) ---
+const CAR_COLORS = [0xd0392b, 0x2f6fd0, 0xd8c22f, 0x39a24a, 0xe8e8e8, 0x2b2b2b, 0xd06fbb];
+function makeCar(color) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.BoxGeometry(1.8, 0.7, 3.6),
+    new THREE.MeshStandardMaterial({ color })
+  );
+  body.position.y = 0.55;
+  const cabin = new THREE.Mesh(
+    new THREE.BoxGeometry(1.4, 0.5, 1.8),
+    new THREE.MeshStandardMaterial({ color: 0x9fd0ea, transparent: true, opacity: 0.7 })
+  );
+  cabin.position.set(0, 1.0, -0.2);
+  g.add(body, cabin);
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111111 });
+  [[-0.95, 1.2], [0.95, 1.2], [-0.95, -1.2], [0.95, -1.2]].forEach(([x, z]) => {
+    const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.3, 12), wheelMat);
+    wheel.rotation.z = Math.PI / 2;
+    wheel.position.set(x, 0.35, z);
+    g.add(wheel);
+  });
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
+// Parked cars sit right at the curb (on the road, not the sidewalk) all
+// along both streets, and double as regular colliders so the player can't
+// walk through them. Kept well outside the moving-traffic lane (see
+// MOVING_LANES below) so through-traffic never overlaps them.
+const PARKED_LANE_OFFSET = STREET_HALF_WIDTH - 1.3; // ~3.7, hugs the curb
+function placeParkedCars() {
+  const laneOffset = PARKED_LANE_OFFSET;
+  const halfLen = 1.9, halfWid = 1.0;
+  const addParked = (x, z, axis, rotY) => {
+    const car = makeCar(CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)]);
+    car.position.set(x, 0, z);
+    car.rotation.y = rotY;
+    scene.add(car);
+    const hx = axis === 'x' ? halfLen : halfWid;
+    const hz = axis === 'x' ? halfWid : halfLen;
+    colliders.push({ minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz });
+  };
+  [1, -1].forEach((sz) => {
+    for (let x = -(CITY_SIZE - 20); x <= CITY_SIZE - 20; x += 22) {
+      if (Math.abs(x) < STREET_HALF_WIDTH + 4) continue;
+      if (Math.random() < 0.4) continue;
+      // Car body's long axis is local Z, so it needs a 90° turn to lie
+      // parallel to a street that runs along X (this is what was wrong —
+      // it was left facing across the road instead of along it).
+      addParked(x, sz * laneOffset, 'x', Math.PI / 2);
+    }
+  });
+  [1, -1].forEach((sx) => {
+    for (let z = -(CITY_SIZE - 20); z <= CITY_SIZE - 20; z += 22) {
+      if (Math.abs(z) < STREET_HALF_WIDTH + 4) continue;
+      if (Math.random() < 0.4) continue;
+      addParked(sx * laneOffset, z, 'z', 0);
+    }
+  });
+}
+
+// --- Moving traffic ---
+// Four one-way lanes (both directions on each of the two streets), each
+// looping cars from one edge of the city to the other. Kept closer to the
+// street's centerline than PARKED_LANE_OFFSET so through-traffic never
+// shares a line with the parked cars hugging the curb.
+// Needs to clear PARKED_LANE_OFFSET by more than the two cars' combined
+// cross-axis half-widths (~2.2) — otherwise a moving car passing a parked
+// one would register as a collision (blocked forever) even though they're
+// meant to be in separate lanes.
+const MOVING_LANE_OFFSET = STREET_HALF_WIDTH - 3.7; // ~1.3
+const MOVING_LANES = [
+  { axis: 'x', cross: MOVING_LANE_OFFSET, dir: 1 },
+  { axis: 'x', cross: -MOVING_LANE_OFFSET, dir: -1 },
+  { axis: 'z', cross: MOVING_LANE_OFFSET, dir: 1 },
+  { axis: 'z', cross: -MOVING_LANE_OFFSET, dir: -1 },
+];
+const movingCars = [];
+const CAR_HIT_RADIUS = 2.0;
+const CAR_DAMAGE = 10;
+const CAR_HIT_INVULN = 1.0; // seconds, matches the knockback cooldown
+const CAR_HALF_LEN = 1.9, CAR_HALF_WID = 1.0;
+
+function spawnMovingCars(perLane = 3) {
+  MOVING_LANES.forEach((lane) => {
+    for (let i = 0; i < perLane; i++) {
+      const mesh = makeCar(CAR_COLORS[Math.floor(Math.random() * CAR_COLORS.length)]);
+      const along = -CITY_SIZE + (i / perLane) * CITY_SIZE * 2 + Math.random() * 10;
+      if (lane.axis === 'x') {
+        mesh.position.set(along, 0, lane.cross);
+        mesh.rotation.y = lane.dir > 0 ? Math.PI / 2 : -Math.PI / 2;
+      } else {
+        mesh.position.set(lane.cross, 0, along);
+        mesh.rotation.y = lane.dir > 0 ? 0 : Math.PI;
+      }
+      scene.add(mesh);
+      movingCars.push({ mesh, lane, speed: 9 + Math.random() * 5 });
+    }
+  });
+}
+spawnMovingCars();
+
+// AABB for a car centered at (x, z), accounting for which way it's facing
+// (its long axis is local Z, so a car driving along world X needs its
+// bounding box's long side on X instead). `margin` inflates it slightly so
+// cars keep a small gap rather than touching bumper-to-bumper.
+function carAABBAt(x, z, axis, margin = 0.2) {
+  const halfLen = CAR_HALF_LEN + margin, halfWid = CAR_HALF_WID + margin;
+  const hx = axis === 'x' ? halfLen : halfWid;
+  const hz = axis === 'x' ? halfWid : halfLen;
+  return { minX: x - hx, maxX: x + hx, minZ: z - hz, maxZ: z + hz };
+}
+function aabbOverlap(a, b) {
+  return a.minX < b.maxX && a.maxX > b.minX && a.minZ < b.maxZ && a.maxZ > b.minZ;
+}
+
+function updateTraffic(delta) {
+  movingCars.forEach((car, idx) => {
+    const { mesh, lane, speed } = car;
+    const moveDist = speed * delta;
+    let nextX = mesh.position.x, nextZ = mesh.position.z;
+    if (lane.axis === 'x') nextX += lane.dir * moveDist;
+    else nextZ += lane.dir * moveDist;
+
+    const nextBox = carAABBAt(nextX, nextZ, lane.axis);
+    // Don't drive through parked cars/buildings (in `colliders`) or rear-end
+    // another car ahead in the same street — just wait this frame, like a
+    // car stuck in traffic, rather than clipping through. Only checked
+    // against cars on the SAME axis: without that restriction, two cars on
+    // perpendicular streets meeting at the intersection can each decide the
+    // other is blocking and wait forever, and since every car eventually
+    // passes through the same intersection, that deadlock spreads until the
+    // entire city's traffic is frozen there (this is what was making all
+    // moving cars vanish from the rest of the map over time).
+    const blocked =
+      colliders.some((c) => aabbOverlap(nextBox, c)) ||
+      movingCars.some((other, j) => j !== idx && other.lane.axis === lane.axis && aabbOverlap(
+        nextBox, carAABBAt(other.mesh.position.x, other.mesh.position.z, other.lane.axis)
+      ));
+
+    if (!blocked) {
+      mesh.position.x = nextX;
+      mesh.position.z = nextZ;
+    }
+
+    if (mesh.position.x > CITY_SIZE) mesh.position.x = -CITY_SIZE;
+    if (mesh.position.x < -CITY_SIZE) mesh.position.x = CITY_SIZE;
+    if (mesh.position.z > CITY_SIZE) mesh.position.z = -CITY_SIZE;
+    if (mesh.position.z < -CITY_SIZE) mesh.position.z = CITY_SIZE;
+  });
+}
+
+function updateTrafficCollisions() {
+  if (!character) return;
+  for (const { mesh } of movingCars) {
+    const dx = character.position.x - mesh.position.x;
+    const dz = character.position.z - mesh.position.z;
+    const dist = Math.hypot(dx, dz);
+    if (dist < CAR_HIT_RADIUS) {
+      const now = clock.elapsedTime;
+      if (now - lastHitTime < CAR_HIT_INVULN) continue;
+      lastHitTime = now;
+      takeDamage(CAR_DAMAGE);
+      const pushX = dist > 0.001 ? dx / dist : 1;
+      const pushZ = dist > 0.001 ? dz / dist : 0;
+      startKnockback(pushX, pushZ);
+      break;
+    }
+  }
+}
+
+// --- Coin & pill pickups ---
+function makeCoin() {
+  const coin = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.35, 0.35, 0.08, 20),
+    new THREE.MeshStandardMaterial({ color: 0xffd700, metalness: 0.7, roughness: 0.25, emissive: 0x553c00, emissiveIntensity: 0.4 })
+  );
+  coin.rotation.x = Math.PI / 2;
+  coin.castShadow = true;
+  return coin;
+}
+function makePill() {
+  const g = new THREE.Group();
+  const half = new THREE.MeshStandardMaterial({ color: 0xff8c1a });
+  const otherHalf = new THREE.MeshStandardMaterial({ color: 0xffffff });
+  const capsule = new THREE.Mesh(new THREE.CapsuleGeometry(0.2, 0.45, 4, 10), half);
+  capsule.rotation.z = Math.PI / 2;
+  g.add(capsule);
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
+const pickups = []; // { mesh, type: 'coin' | 'pill' }
+function spawnPickup(type) {
+  const mesh = type === 'coin' ? makeCoin() : makePill();
+  const pos = getRandomReachablePosition(0.6);
+  mesh.position.set(pos.x, type === 'coin' ? 0.5 : 0.6, pos.z);
+  scene.add(mesh);
+  pickups.push({ mesh, type });
+}
+
+const COIN_COUNT = 18;
+const PILL_COUNT = 10;
+const PICKUP_RADIUS = 1.1;
+function initPickups() {
+  for (let i = 0; i < COIN_COUNT; i++) spawnPickup('coin');
+  for (let i = 0; i < PILL_COUNT; i++) spawnPickup('pill');
+}
+
+function updatePickups(delta) {
+  if (!character) return;
+  for (const p of pickups) {
+    p.mesh.rotation.y += delta * 2.2;
+    const dx = character.position.x - p.mesh.position.x;
+    const dz = character.position.z - p.mesh.position.z;
+    if (Math.hypot(dx, dz) > PICKUP_RADIUS) continue;
+
+    if (p.type === 'coin') {
+      addMoney(10);
+    } else {
+      if (hp >= 100) continue; // full health — leave the pill for later
+      heal(10);
+    }
+    const pos = getRandomReachablePosition(0.6);
+    p.mesh.position.x = pos.x;
+    p.mesh.position.z = pos.z;
+  }
+}
+
+// --- Quest system ---
+// A small generic quest list so more quests can be added later without
+// rewriting this panel. Each quest starts 'available' and only does
+// anything once the player clicks it to accept — nothing quest-related
+// (like the NPC actually appearing) happens before that.
+const quests = {
+  findJulie: {
+    title: '尋找 Julie',
+    hint: '在城市裡找到她',
+    description: 'Julie 藏在城市裡某個你走得到的地方，去把她找出來吧！',
+    state: 'available', // available | active | completed
+    onAccept: () => startFindJulieQuest(),
+  },
+};
+
+function renderQuestPanel() {
+  const list = document.getElementById('questList');
+  list.innerHTML = '';
+  Object.entries(quests).forEach(([id, q]) => {
+    const row = document.createElement('div');
+    row.className = `quest-row quest-${q.state}`;
+    const icon = q.state === 'completed' ? '✅' : q.state === 'active' ? '🔸' : '⬜';
+    row.innerHTML = `${icon} ${q.title}<span class="quest-hint">${
+      q.state === 'available' ? '點擊接受任務' : q.hint
+    }</span>`;
+    if (q.state === 'available') {
+      row.addEventListener('click', () => beginQuestIntro(id));
+    }
+    list.appendChild(row);
+  });
+}
+
+function acceptQuest(id) {
+  const q = quests[id];
+  if (!q || q.state !== 'available') return;
+  q.state = 'active';
+  renderQuestPanel();
+  q.onAccept();
+}
+
+function completeQuest(id) {
+  quests[id].state = 'completed';
+  renderQuestPanel();
+}
+
+// --- Quest intro cinematic ---
+// Clicking an available quest doesn't accept it immediately: the camera
+// swings to the character's face, a dialog explains what the quest is, and
+// only once the player confirms does it actually start (spawning whatever
+// NPC/objective it involves) and the camera swings back. Movement is
+// frozen throughout the same way the money-throwing cutscene freezes it —
+// none of the intermediate gameState values here are 'playing'.
+const QUEST_CAM_DURATION = 0.6;
+let questCutsceneStart = 0;
+let pendingQuestId = null;
+
+function beginQuestIntro(id) {
+  const q = quests[id];
+  if (!q || q.state !== 'available' || gameState !== 'playing' || !character) return;
+  pendingQuestId = id;
+  gameState = 'questCamIn';
+  questCutsceneStart = clock.elapsedTime;
+}
+
+function updateQuestCinematic() {
+  if (gameState === 'questCamIn') {
+    const t = Math.min(1, (clock.elapsedTime - questCutsceneStart) / QUEST_CAM_DURATION);
+    const e = easeInOutCubic(t);
+    camera.position.lerpVectors(getGameplayCamPos(), getFrontViewCamPos(), e);
+    camera.lookAt(new THREE.Vector3().lerpVectors(getGameplayLookAt(), getFrontViewLookAt(), e));
+    if (t >= 1) {
+      const q = quests[pendingQuestId];
+      document.getElementById('questDialogTitle').textContent = q.title;
+      document.getElementById('questDialogText').textContent = q.description;
+      document.getElementById('questPortrait').style.display = pendingQuestId === 'findJulie' ? 'block' : 'none';
+      if (pendingQuestId === 'findJulie') renderJuliePortrait();
+      document.getElementById('questIntroDialog').style.display = 'block';
+      gameState = 'questDialog';
+    }
+  } else if (gameState === 'questDialog') {
+    // Holds here (no auto-timeout) until the confirm button is clicked.
+    camera.position.copy(getFrontViewCamPos());
+    camera.lookAt(getFrontViewLookAt());
+  } else if (gameState === 'questCamOut') {
+    const t = Math.min(1, (clock.elapsedTime - questCutsceneStart) / QUEST_CAM_DURATION);
+    const e = easeInOutCubic(t);
+    camera.position.lerpVectors(getFrontViewCamPos(), getGameplayCamPos(), e);
+    camera.lookAt(new THREE.Vector3().lerpVectors(getFrontViewLookAt(), getGameplayLookAt(), e));
+    if (t >= 1) {
+      gameState = 'playing';
+    }
+  }
+}
+
+// --- Quest NPC: Julie ---
+// Her model loads in the background as soon as the page does (it's a large
+// file), but she isn't placed in the world or tracked for the quest until
+// the player actually accepts "尋找 Julie" from the quest panel.
 let npc = null;
+let npcActive = false;
 let npcFound = false;
 const npcMixers = [];
+let resolveNpcReady;
+const npcReady = new Promise((resolve) => { resolveNpcReady = resolve; });
 
 const npcLoader = new GLTFLoader();
 npcLoader.load(
@@ -437,30 +889,230 @@ npcLoader.load(
 
     const box2 = new THREE.Box3().setFromObject(npc);
     npc.position.y -= box2.min.y;
-    npc.position.x = NPC_POSITION.x;
-    npc.position.z = NPC_POSITION.z;
-    npc.rotation.y = Math.PI; // face back toward the street/player
-    scene.add(npc);
 
     if (gltf.animations && gltf.animations.length > 0) {
       const npcMixer = new THREE.AnimationMixer(npc);
       npcMixer.clipAction(gltf.animations[0]).play();
       npcMixers.push(npcMixer);
     }
+
+    setupJuliePortrait();
+    resolveNpcReady();
   },
   undefined,
   (err) => console.error('Failed to load julie.glb', err)
 );
 
+// A tiny standalone scene + renderer just for the head-and-shoulders
+// portrait shown in the quest dialog — a clone of Julie's model so it's
+// completely independent of her (invisible, not-yet-spawned) position in
+// the main world.
+let portraitRenderer = null, portraitScene = null, portraitCamera = null, portraitModel = null;
+function setupJuliePortrait() {
+  const canvas = document.getElementById('questPortrait');
+  portraitRenderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  portraitRenderer.setSize(120, 120);
+
+  portraitScene = new THREE.Scene();
+  portraitScene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
+  const dirLight = new THREE.DirectionalLight(0xffffff, 1.4);
+  dirLight.position.set(1, 2, 3);
+  portraitScene.add(dirLight);
+
+  // A plain .clone(true) doesn't rebind a SkinnedMesh's skeleton, which
+  // leaves it collapsed/invisible — SkeletonUtils' clone() handles that.
+  portraitModel = cloneSkinned(npc);
+  portraitModel.position.set(0, 0, 0);
+  portraitModel.rotation.y = 0.4; // slight turn; camera sits on the model's rest-facing (+Z) side
+  portraitScene.add(portraitModel);
+
+  const box = new THREE.Box3().setFromObject(portraitModel);
+  const headY = box.max.y - 0.14; // frame around head height, not full-body
+  portraitCamera = new THREE.PerspectiveCamera(28, 1, 0.1, 10);
+  portraitCamera.position.set(0, headY, 0.55);
+  portraitCamera.lookAt(0, headY, 0);
+}
+function renderJuliePortrait() {
+  if (portraitRenderer) portraitRenderer.render(portraitScene, portraitCamera);
+}
+
+const FOUND_DISTANCE = 2.5;
+async function startFindJulieQuest() {
+  await Promise.all([cityReady, npcReady, characterReady]);
+  const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
+  npc.position.x = pos.x;
+  npc.position.z = pos.z;
+  npc.rotation.y = Math.random() * Math.PI * 2;
+  scene.add(npc);
+  npcActive = true;
+}
+
 function checkQuestProgress() {
-  if (npcFound || !npc || !character) return;
-  const dx = character.position.x - NPC_POSITION.x;
-  const dz = character.position.z - NPC_POSITION.z;
+  if (!npcActive || npcFound || !npc || !character) return;
+  const dx = character.position.x - npc.position.x;
+  const dz = character.position.z - npc.position.z;
   if (Math.sqrt(dx * dx + dz * dz) < FOUND_DISTANCE) {
     npcFound = true;
+    completeQuest('findJulie');
+    gameState = 'questComplete'; // freezes player/traffic-hit input until confirmed
     document.getElementById('foundOverlay').style.display = 'flex';
   }
 }
+
+// --- HP / money HUD ---
+let hp = 100;
+let money = 0;
+let lastHitTime = -999;
+
+// --- Being hit by a car: sent flying, tumbling in the air, then lands ---
+// Movement input is ignored for the duration; position/rotation are driven
+// entirely by this instead (see the knockback branch in updateCharacter).
+const KNOCKBACK_DURATION = 0.7;
+const KNOCKBACK_DIST = 8;
+const KNOCKBACK_HEIGHT = 3;
+let knockbackTimer = 0;
+const knockbackStartPos = new THREE.Vector3();
+const knockbackDir = new THREE.Vector3();
+const knockbackSpinAxis = new THREE.Vector3(1, 0, 0);
+let knockbackSpinSpeed = 0;
+
+function startKnockback(dirX, dirZ) {
+  knockbackStartPos.copy(character.position);
+  knockbackDir.set(dirX, 0, dirZ);
+  knockbackTimer = KNOCKBACK_DURATION;
+  // A mostly-horizontal, randomized axis gives a tumbling cartwheel rather
+  // than a flat, unnatural spin purely around one axis every time.
+  knockbackSpinAxis.set(Math.random() - 0.5, (Math.random() - 0.5) * 0.4, Math.random() - 0.5).normalize();
+  knockbackSpinSpeed = (14 + Math.random() * 8) * (Math.random() < 0.5 ? 1 : -1);
+}
+
+function updateHUD() {
+  document.getElementById('hpBarFill').style.width = Math.max(0, hp) + '%';
+  document.getElementById('hpText').textContent = `${Math.round(hp)}/100`;
+  document.getElementById('moneyText').textContent = `$${money}`;
+}
+function takeDamage(amount) {
+  hp = Math.max(0, hp - amount);
+  updateHUD();
+}
+function heal(amount) {
+  if (hp >= 100) return false;
+  hp = Math.min(100, hp + amount);
+  updateHUD();
+  return true;
+}
+function addMoney(amount) {
+  money += amount;
+  updateHUD();
+}
+
+// --- Throwing money (灑錢): a short cutscene — camera swings around to the
+// character's face, holds for a beat, the money actually leaves (particles
+// + the deduction) with a "爹地好開心" caption, then the camera swings back
+// and control returns. Player input is frozen throughout because none of
+// the intermediate gameState values here are 'playing', which is what
+// updateCharacter (and the traffic-hit/pickup checks) gate on.
+const MONEY_CAM_DURATION = 0.6;
+const MONEY_HOLD_DURATION = 0.4; // + MONEY_CAM_DURATION = ~1s at the face before the throw
+const MONEY_DIALOG_DURATION = 1.0;
+let moneyStateStart = 0;
+
+function startThrowMoneySequence() {
+  if (!character || gameState !== 'playing') return;
+  if (money <= 0) return;
+  gameState = 'moneyCamIn';
+  moneyStateStart = clock.elapsedTime;
+}
+
+function updateMoneyCinematic() {
+  if (gameState === 'moneyCamIn') {
+    const t = Math.min(1, (clock.elapsedTime - moneyStateStart) / MONEY_CAM_DURATION);
+    const e = easeInOutCubic(t);
+    camera.position.lerpVectors(getGameplayCamPos(), getFrontViewCamPos(), e);
+    camera.lookAt(new THREE.Vector3().lerpVectors(getGameplayLookAt(), getFrontViewLookAt(), e));
+    if (t >= 1) {
+      gameState = 'moneyHold';
+      moneyStateStart = clock.elapsedTime;
+    }
+  } else if (gameState === 'moneyHold') {
+    camera.position.copy(getFrontViewCamPos());
+    camera.lookAt(getFrontViewLookAt());
+    if (clock.elapsedTime - moneyStateStart >= MONEY_HOLD_DURATION) {
+      throwMoney();
+      document.getElementById('moneyDialog').style.display = 'block';
+      gameState = 'moneyDialog';
+      moneyStateStart = clock.elapsedTime;
+    }
+  } else if (gameState === 'moneyDialog') {
+    camera.position.copy(getFrontViewCamPos());
+    camera.lookAt(getFrontViewLookAt());
+    if (clock.elapsedTime - moneyStateStart >= MONEY_DIALOG_DURATION) {
+      document.getElementById('moneyDialog').style.display = 'none';
+      gameState = 'moneyCamOut';
+      moneyStateStart = clock.elapsedTime;
+    }
+  } else if (gameState === 'moneyCamOut') {
+    const t = Math.min(1, (clock.elapsedTime - moneyStateStart) / MONEY_CAM_DURATION);
+    const e = easeInOutCubic(t);
+    camera.position.lerpVectors(getFrontViewCamPos(), getGameplayCamPos(), e);
+    camera.lookAt(new THREE.Vector3().lerpVectors(getFrontViewLookAt(), getGameplayLookAt(), e));
+    if (t >= 1) {
+      gameState = 'playing';
+    }
+  }
+}
+
+// The actual particle burst + deduction, fired partway through the
+// cutscene above (see 'moneyHold'). No gameState guard here — the caller
+// is responsible for that (startThrowMoneySequence for the player-facing
+// entry point).
+const THROW_COST = 10;
+const moneyParticles = []; // { mesh, velocity, life }
+function throwMoney() {
+  const amount = Math.min(THROW_COST, money);
+  if (amount <= 0) return;
+  money -= amount;
+  updateHUD();
+
+  const origin = character.position.clone().add(new THREE.Vector3(0, 1.3, 0));
+  for (let i = 0; i < 14; i++) {
+    const bill = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.35, 0.18),
+      new THREE.MeshStandardMaterial({ color: 0x3fb552, side: THREE.DoubleSide })
+    );
+    bill.position.copy(origin);
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 1.8 + Math.random() * 2.6;
+    const velocity = new THREE.Vector3(
+      Math.cos(angle) * speed,
+      3 + Math.random() * 2.5,
+      Math.sin(angle) * speed
+    );
+    scene.add(bill);
+    moneyParticles.push({ mesh: bill, velocity, life: 0 });
+  }
+}
+
+function updateMoneyParticles(delta) {
+  for (let i = moneyParticles.length - 1; i >= 0; i--) {
+    const p = moneyParticles[i];
+    p.velocity.y -= 9.8 * delta;
+    p.mesh.position.addScaledVector(p.velocity, delta);
+    p.mesh.rotation.x += delta * 6;
+    p.mesh.rotation.y += delta * 4;
+    p.life += delta;
+    if (p.mesh.position.y < 0.05 || p.life > 1.8) {
+      scene.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      p.mesh.material.dispose();
+      moneyParticles.splice(i, 1);
+    }
+  }
+}
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyF') startThrowMoneySequence();
+});
 
 // --- Camera zoom ---
 // The gameplay camera is rigidly locked behind the character (see
@@ -473,6 +1125,29 @@ const CAM_ZOOM_MAX = 2.2;
 window.addEventListener('wheel', (e) => {
   if (gameState !== 'playing') return;
   camZoom = THREE.MathUtils.clamp(camZoom + Math.sign(e.deltaY) * 0.08, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
+}, { passive: true });
+
+// Pinch-to-zoom for touch: track the distance between the first two touch
+// points and scale camZoom by how much that distance changes between
+// frames, same idea as the wheel handler above.
+let pinchStartDist = null;
+function touchDist(touches) {
+  const dx = touches[0].clientX - touches[1].clientX;
+  const dy = touches[0].clientY - touches[1].clientY;
+  return Math.hypot(dx, dy);
+}
+window.addEventListener('touchstart', (e) => {
+  if (e.touches.length === 2) pinchStartDist = touchDist(e.touches);
+}, { passive: true });
+window.addEventListener('touchmove', (e) => {
+  if (e.touches.length !== 2 || pinchStartDist === null || gameState !== 'playing') return;
+  const dist = touchDist(e.touches);
+  const delta = (pinchStartDist - dist) * 0.01;
+  camZoom = THREE.MathUtils.clamp(camZoom + delta, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
+  pinchStartDist = dist;
+}, { passive: true });
+window.addEventListener('touchend', (e) => {
+  if (e.touches.length < 2) pinchStartDist = null;
 }, { passive: true });
 
 // --- Character ---
@@ -574,6 +1249,31 @@ const keys = {};
 window.addEventListener('keydown', (e) => { keys[e.code] = true; });
 window.addEventListener('keyup', (e) => { keys[e.code] = false; });
 
+// --- Touch controls (phones/tablets) ---
+// The on-screen buttons just set/clear the same `keys` entries the keyboard
+// listeners use, so updateCharacter() doesn't need to know or care which
+// input method is driving it.
+const isTouchDevice = ('ontouchstart' in window) || navigator.maxTouchPoints > 0;
+
+function bindHoldButton(id, code) {
+  const el = document.getElementById(id);
+  const press = (e) => { e.preventDefault(); keys[code] = true; };
+  const release = (e) => { e.preventDefault(); keys[code] = false; };
+  el.addEventListener('pointerdown', press);
+  el.addEventListener('pointerup', release);
+  el.addEventListener('pointercancel', release);
+  el.addEventListener('pointerleave', release);
+}
+bindHoldButton('mcUp', 'KeyW');
+bindHoldButton('mcDown', 'KeyS');
+bindHoldButton('mcLeft', 'KeyA');
+bindHoldButton('mcRight', 'KeyD');
+bindHoldButton('mcRun', 'ShiftLeft');
+document.getElementById('mcThrow').addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  startThrowMoneySequence();
+});
+
 let walkCycle = 0;
 
 // Procedural fake-walk for models with no skeleton/animation: bobs, sways
@@ -633,52 +1333,71 @@ function groundHeightAt(x, z) {
 function updateCharacter(delta) {
   if (!character || gameState !== 'playing') return;
 
-  const walkSpeed = 2.5;
-  const runSpeed = 8.5;
-  const turnSpeed = 3; // radians/sec, tank-style A/D turning
+  if (knockbackTimer > 0) {
+    // Flying through the air from a car hit: position and the model's tilt
+    // are driven entirely by the knockback arc, ignoring WASD until it
+    // finishes and the character lands.
+    knockbackTimer = Math.max(0, knockbackTimer - delta);
+    const t = 1 - knockbackTimer / KNOCKBACK_DURATION;
+    const eased = 1 - Math.pow(1 - t, 2); // ease-out: fast launch, slowing before landing
+    character.position.x = knockbackStartPos.x + knockbackDir.x * KNOCKBACK_DIST * eased;
+    character.position.z = knockbackStartPos.z + knockbackDir.z * KNOCKBACK_DIST * eased;
+    character.position.y = knockbackStartPos.y + Math.sin(Math.min(1, t) * Math.PI) * KNOCKBACK_HEIGHT;
+    if (model) model.rotateOnAxis(knockbackSpinAxis, knockbackSpinSpeed * delta);
 
-  const forwardHeld = (keys['KeyW'] || keys['ArrowUp']) ? 1 : 0;
-  const backHeld = (keys['KeyS'] || keys['ArrowDown']) ? 1 : 0;
-  const turnLeftHeld = (keys['KeyA'] || keys['ArrowLeft']) ? 1 : 0;
-  const turnRightHeld = (keys['KeyD'] || keys['ArrowRight']) ? 1 : 0;
-  const running = keys['ShiftLeft'] || keys['ShiftRight'];
-
-  // Tank-style controls: A/D turn the character in place, W/S move along
-  // however it's currently facing. This sidesteps the strafe-relative-to-
-  // its-own-facing scheme tried earlier — turning the character to face its
-  // resultant strafe direction while that direction is itself defined
-  // relative to the character's current facing is a moving target (the
-  // "target" heading is always 90° away from wherever the character
-  // currently is), so it never converges and just spins in place forever.
-  // Turning explicitly via A/D has no such feedback loop.
-  const turnInput = turnRightHeld - turnLeftHeld;
-  if (turnInput !== 0) {
-    character.rotation.y -= turnInput * turnSpeed * delta;
-  }
-
-  const moveInput = forwardHeld - backHeld;
-  const isMoving = moveInput !== 0;
-
-  if (isMoving) {
-    const facingAngle = character.rotation.y;
-    const forward = new THREE.Vector3(Math.sin(facingAngle), 0, Math.cos(facingAngle));
-
-    const speed = running ? runSpeed : walkSpeed;
-    tryMove(forward.x * moveInput * speed * delta, forward.z * moveInput * speed * delta);
-
-    if (actions.walkName) {
-      playAction(running ? actions.runName : actions.walkName);
+    if (knockbackTimer === 0 && model) {
+      // Landed — clear the tumble so it doesn't stay mid-spin into the idle pose.
+      model.rotation.set(0, 0, 0);
+      model.position.y = modelBaseY;
     }
   } else {
-    if (actions.idleName) playAction(actions.idleName);
+    const walkSpeed = 2.5;
+    const runSpeed = 8.5;
+    const turnSpeed = 3; // radians/sec, tank-style A/D turning
+
+    const forwardHeld = (keys['KeyW'] || keys['ArrowUp']) ? 1 : 0;
+    const backHeld = (keys['KeyS'] || keys['ArrowDown']) ? 1 : 0;
+    const turnLeftHeld = (keys['KeyA'] || keys['ArrowLeft']) ? 1 : 0;
+    const turnRightHeld = (keys['KeyD'] || keys['ArrowRight']) ? 1 : 0;
+    const running = keys['ShiftLeft'] || keys['ShiftRight'];
+
+    // Tank-style controls: A/D turn the character in place, W/S move along
+    // however it's currently facing. This sidesteps the strafe-relative-to-
+    // its-own-facing scheme tried earlier — turning the character to face its
+    // resultant strafe direction while that direction is itself defined
+    // relative to the character's current facing is a moving target (the
+    // "target" heading is always 90° away from wherever the character
+    // currently is), so it never converges and just spins in place forever.
+    // Turning explicitly via A/D has no such feedback loop.
+    const turnInput = turnRightHeld - turnLeftHeld;
+    if (turnInput !== 0) {
+      character.rotation.y -= turnInput * turnSpeed * delta;
+    }
+
+    const moveInput = forwardHeld - backHeld;
+    const isMoving = moveInput !== 0;
+
+    if (isMoving) {
+      const facingAngle = character.rotation.y;
+      const forward = new THREE.Vector3(Math.sin(facingAngle), 0, Math.cos(facingAngle));
+
+      const speed = running ? runSpeed : walkSpeed;
+      tryMove(forward.x * moveInput * speed * delta, forward.z * moveInput * speed * delta);
+
+      if (actions.walkName) {
+        playAction(running ? actions.runName : actions.walkName);
+      }
+    } else {
+      if (actions.idleName) playAction(actions.idleName);
+    }
+
+    // Step the character up onto the raised sidewalk curb (or back down onto
+    // the road) instead of leaving it sunk to its ankles in the pavement.
+    const targetGroundY = groundHeightAt(character.position.x, character.position.z);
+    character.position.y = THREE.MathUtils.lerp(character.position.y, targetGroundY, Math.min(1, delta * 12));
+
+    applyProceduralWalk(delta, isMoving, running);
   }
-
-  // Step the character up onto the raised sidewalk curb (or back down onto
-  // the road) instead of leaving it sunk to its ankles in the pavement.
-  const targetGroundY = groundHeightAt(character.position.x, character.position.z);
-  character.position.y = THREE.MathUtils.lerp(character.position.y, targetGroundY, Math.min(1, delta * 12));
-
-  applyProceduralWalk(delta, isMoving, running);
 
   // Camera stays rigidly behind the character: the offset is defined in the
   // character's own local space (0, height, distance) and rotated by its
@@ -744,12 +1463,21 @@ function updateCinematicCamera() {
     camera.lookAt(new THREE.Vector3().lerpVectors(getFrontViewLookAt(), endLookAt, e));
     if (t >= 1) {
       gameState = 'playing';
+      document.getElementById('questPanel').style.display = 'block';
+      document.getElementById('hud').style.display = 'block';
+      renderQuestPanel();
+      updateHUD();
+      if (isTouchDevice) {
+        document.getElementById('mobileControls').style.display = 'block';
+        document.getElementById('info').innerHTML =
+          '左下角搖桿：移動、轉向<br/>右下角按鈕：跑步、灑錢<br/>雙指縮放：拉近拉遠';
+      }
       document.getElementById('info').style.display = 'block';
-      document.getElementById('questBanner').style.display = 'block';
     }
   }
 }
 
+window.__dbg = { movingCars };
 const startBtn = document.getElementById('startBtn');
 startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
@@ -766,12 +1494,20 @@ document.getElementById('dialogConfirm').addEventListener('click', () => {
   gameState = 'transitioning';
 });
 
-// Simplest reliable "reset everything" — reload the page from scratch
-// rather than trying to manually rewind every piece of scene/game state.
-// A cache-busting query string forces a real re-fetch instead of the
-// browser silently reusing whatever HTML it already has cached.
-document.getElementById('restartBtn').addEventListener('click', () => {
-  location.href = location.pathname + '?t=' + Date.now();
+// Just dismisses the "found" card and hands control back — the quest stays
+// marked completed in the panel, nothing about the run resets.
+document.getElementById('foundConfirm').addEventListener('click', () => {
+  document.getElementById('foundOverlay').style.display = 'none';
+  gameState = 'playing';
+});
+
+document.getElementById('questDialogConfirm').addEventListener('click', () => {
+  document.getElementById('questIntroDialog').style.display = 'none';
+  const id = pendingQuestId;
+  pendingQuestId = null;
+  if (id) acceptQuest(id);
+  questCutsceneStart = clock.elapsedTime;
+  gameState = 'questCamOut';
 });
 
 // --- Animate loop ---
@@ -781,10 +1517,16 @@ function animate() {
 
   updateCharacter(delta);
   updateCinematicCamera();
+  updateMoneyCinematic();
+  updateQuestCinematic();
   if (mixer) mixer.update(delta);
   npcMixers.forEach((m) => m.update(delta));
+  updateTraffic(delta);
+  updateMoneyParticles(delta);
   if (gameState === 'playing') {
     checkQuestProgress();
+    updateTrafficCollisions();
+    updatePickups(delta);
   }
 
   renderer.render(scene, camera);
