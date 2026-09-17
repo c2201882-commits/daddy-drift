@@ -2,13 +2,27 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8" />
+<!-- Without this, mobile browsers render at a virtual desktop-width
+     viewport (~980px) and scale the whole page down to fit, which is why
+     everything looked tiny on a phone. -->
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
 <title>爹地漂流記</title>
 <style>
   html, body { margin: 0; padding: 0; overflow: hidden; background: #87ceeb; font-family: sans-serif; }
-  #info {
-    position: fixed; bottom: 10px; left: 10px; color: #fff; background: rgba(0,0,0,0.5);
-    padding: 8px 12px; border-radius: 8px; font-size: 12px; line-height: 1.5; z-index: 10;
-    display: none;
+  #topRightBar {
+    position: fixed; top: 10px; right: 10px; z-index: 10; display: none;
+    align-items: flex-start; gap: 8px;
+  }
+  #helpBtn {
+    width: 30px; height: 30px; border-radius: 50%; border: none; flex-shrink: 0;
+    background: rgba(0,0,0,0.55); color: #fff; font-size: 15px; font-weight: bold;
+    cursor: pointer; line-height: 30px; padding: 0;
+  }
+  #helpPanel {
+    position: fixed; top: 48px; right: 10px; z-index: 12; display: none;
+    color: #fff; background: rgba(0,0,0,0.8);
+    padding: 10px 14px; border-radius: 8px; font-size: 12px; line-height: 1.6;
+    max-width: 220px;
   }
   #loading {
     position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
@@ -29,7 +43,6 @@
   .quest-row.quest-completed { opacity: 0.55; text-decoration: line-through; }
   .quest-row .quest-hint { display: block; font-size: 11px; opacity: 0.75; margin-top: 2px; }
   #hud {
-    position: fixed; top: 10px; right: 10px; z-index: 10; display: none;
     background: rgba(0,0,0,0.55); color: #fff; border-radius: 10px; padding: 10px 14px;
     font-size: 13px; min-width: 160px;
   }
@@ -40,15 +53,17 @@
   #mobileControls {
     position: fixed; inset: 0; z-index: 15; display: none; pointer-events: none;
   }
-  #mcMove {
-    position: absolute; left: 16px; bottom: 16px; pointer-events: auto;
-    display: flex; flex-direction: column; align-items: center; gap: 6px;
-  }
-  .mc-row { display: flex; gap: 6px; }
-  .mc-btn {
-    width: 58px; height: 58px; border-radius: 50%; border: none;
-    background: rgba(255,255,255,0.28); color: #fff; font-size: 22px;
+  #joystickBase {
+    position: absolute; left: 24px; bottom: 24px; width: 130px; height: 130px;
+    border-radius: 50%; background: rgba(255,255,255,0.18);
+    border: 2px solid rgba(255,255,255,0.35); pointer-events: auto;
     touch-action: none; user-select: none; -webkit-user-select: none;
+  }
+  #joystickKnob {
+    position: absolute; left: 50%; top: 50%; width: 58px; height: 58px;
+    margin-left: -29px; margin-top: -29px; border-radius: 50%;
+    background: rgba(255,255,255,0.55); pointer-events: none;
+    transition: transform 0.06s linear;
   }
   .mc-btn:active { background: rgba(255,255,255,0.5); }
   #mcActions {
@@ -61,6 +76,16 @@
     font-size: 14px; touch-action: none; user-select: none; -webkit-user-select: none;
   }
   .mc-wide:active { background: rgba(255,213,74,1); }
+  #zoomSliderWrap {
+    position: absolute; right: 8px; top: 50%; transform: translateY(-50%);
+    width: 44px; height: 200px; pointer-events: auto;
+    display: flex; align-items: center; justify-content: center;
+  }
+  #zoomSlider {
+    width: 180px; height: 36px;
+    transform: rotate(-90deg);
+    touch-action: none;
+  }
   #startScreen {
     position: fixed; inset: 0; z-index: 30; display: flex; flex-direction: column;
     align-items: center; justify-content: center; gap: 24px;
@@ -134,14 +159,18 @@
   <h3>任務</h3>
   <div id="questList"></div>
 </div>
-<div id="hud">
-  <div id="hpRow">
-    <span>❤️</span>
-    <div id="hpBarOuter"><div id="hpBarFill"></div></div>
-    <span id="hpText">100/100</span>
+<div id="topRightBar">
+  <button id="helpBtn">？</button>
+  <div id="hud">
+    <div id="hpRow">
+      <span>❤️</span>
+      <div id="hpBarOuter"><div id="hpBarFill"></div></div>
+      <span id="hpText">100/100</span>
+    </div>
+    <div id="moneyRow">💰 <span id="moneyText">$0</span></div>
   </div>
-  <div id="moneyRow">💰 <span id="moneyText">$0</span></div>
 </div>
+<div id="helpPanel"></div>
 <div id="foundOverlay">
   <div class="card">
     <h2>🎉 找到了！</h2>
@@ -156,21 +185,10 @@
   <p id="questDialogText"></p>
   <button id="questDialogConfirm">確認</button>
 </div>
-<div id="info">
-  W / S：前進、後退<br/>
-  A / D：左轉、右轉<br/>
-  Shift：跑步<br/>
-  F：灑錢<br/>
-  滾輪：縮放
-</div>
 <div id="mobileControls">
-  <div id="mcMove">
-    <button id="mcUp" class="mc-btn">▲</button>
-    <div class="mc-row">
-      <button id="mcLeft" class="mc-btn">◀</button>
-      <button id="mcDown" class="mc-btn">▼</button>
-      <button id="mcRight" class="mc-btn">▶</button>
-    </div>
+  <div id="joystickBase"><div id="joystickKnob"></div></div>
+  <div id="zoomSliderWrap">
+    <input type="range" id="zoomSlider" min="0.5" max="2.2" step="0.01" value="1" />
   </div>
   <div id="mcActions">
     <button id="mcRun" class="mc-btn mc-wide">跑步</button>
@@ -1127,28 +1145,8 @@ window.addEventListener('wheel', (e) => {
   camZoom = THREE.MathUtils.clamp(camZoom + Math.sign(e.deltaY) * 0.08, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
 }, { passive: true });
 
-// Pinch-to-zoom for touch: track the distance between the first two touch
-// points and scale camZoom by how much that distance changes between
-// frames, same idea as the wheel handler above.
-let pinchStartDist = null;
-function touchDist(touches) {
-  const dx = touches[0].clientX - touches[1].clientX;
-  const dy = touches[0].clientY - touches[1].clientY;
-  return Math.hypot(dx, dy);
-}
-window.addEventListener('touchstart', (e) => {
-  if (e.touches.length === 2) pinchStartDist = touchDist(e.touches);
-}, { passive: true });
-window.addEventListener('touchmove', (e) => {
-  if (e.touches.length !== 2 || pinchStartDist === null || gameState !== 'playing') return;
-  const dist = touchDist(e.touches);
-  const delta = (pinchStartDist - dist) * 0.01;
-  camZoom = THREE.MathUtils.clamp(camZoom + delta, CAM_ZOOM_MIN, CAM_ZOOM_MAX);
-  pinchStartDist = dist;
-}, { passive: true });
-window.addEventListener('touchend', (e) => {
-  if (e.touches.length < 2) pinchStartDist = null;
-}, { passive: true });
+// On touch devices, zoom is a dedicated vertical slider (see #zoomSlider)
+// instead of a pinch gesture — wired up down in the touch-controls section.
 
 // --- Character ---
 // `character` is the root group: it owns world position + facing rotation.
@@ -1264,14 +1262,91 @@ function bindHoldButton(id, code) {
   el.addEventListener('pointercancel', release);
   el.addEventListener('pointerleave', release);
 }
-bindHoldButton('mcUp', 'KeyW');
-bindHoldButton('mcDown', 'KeyS');
-bindHoldButton('mcLeft', 'KeyA');
-bindHoldButton('mcRight', 'KeyD');
 bindHoldButton('mcRun', 'ShiftLeft');
+
+// Virtual joystick for movement: dragging the knob sets the same
+// forward/back/turn `keys` entries the keyboard uses, based on which
+// quadrant of the base the knob is pulled toward. A dead zone near the
+// center keeps small jitters from the player's thumb from as being read as
+// input.
+(function setupJoystick() {
+  const base = document.getElementById('joystickBase');
+  const knob = document.getElementById('joystickKnob');
+  const maxRadius = 45; // px the knob can travel from center
+  const deadZone = 0.3; // fraction of maxRadius before a direction "activates"
+  let activePointerId = null;
+
+  function clearMoveKeys() {
+    keys['KeyW'] = false;
+    keys['KeyS'] = false;
+    keys['KeyA'] = false;
+    keys['KeyD'] = false;
+  }
+
+  function updateFromPointer(clientX, clientY) {
+    const rect = base.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2;
+    const cy = rect.top + rect.height / 2;
+    let dx = clientX - cx;
+    let dy = clientY - cy;
+    const dist = Math.hypot(dx, dy);
+    const clamped = Math.min(dist, maxRadius);
+    if (dist > 0) {
+      dx = (dx / dist) * clamped;
+      dy = (dy / dist) * clamped;
+    }
+    knob.style.transform = `translate(${dx}px, ${dy}px)`;
+
+    const nx = dx / maxRadius, ny = dy / maxRadius; // normalized -1..1
+    keys['KeyW'] = ny < -deadZone;
+    keys['KeyS'] = ny > deadZone;
+    keys['KeyA'] = nx < -deadZone;
+    keys['KeyD'] = nx > deadZone;
+  }
+
+  function reset() {
+    activePointerId = null;
+    knob.style.transform = 'translate(0px, 0px)';
+    clearMoveKeys();
+  }
+
+  base.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    activePointerId = e.pointerId;
+    updateFromPointer(e.clientX, e.clientY);
+  });
+  window.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== activePointerId) return;
+    e.preventDefault();
+    updateFromPointer(e.clientX, e.clientY);
+  });
+  window.addEventListener('pointerup', (e) => {
+    if (e.pointerId !== activePointerId) return;
+    reset();
+  });
+  window.addEventListener('pointercancel', (e) => {
+    if (e.pointerId !== activePointerId) return;
+    reset();
+  });
+})();
 document.getElementById('mcThrow').addEventListener('pointerdown', (e) => {
   e.preventDefault();
   startThrowMoneySequence();
+});
+
+// Dedicated vertical zoom slider for touch, replacing pinch-to-zoom — same
+// camZoom variable the desktop scroll wheel drives.
+document.getElementById('zoomSlider').addEventListener('input', (e) => {
+  camZoom = parseFloat(e.target.value);
+});
+
+// Help panel: a "？" button toggles a small popup with the controls
+// (its text is filled in once gameplay starts — see updateCinematicCamera's
+// 'transitioning' branch — since it depends on whether this is a touch
+// device or not).
+document.getElementById('helpBtn').addEventListener('click', () => {
+  const panel = document.getElementById('helpPanel');
+  panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
 });
 
 let walkCycle = 0;
@@ -1464,15 +1539,15 @@ function updateCinematicCamera() {
     if (t >= 1) {
       gameState = 'playing';
       document.getElementById('questPanel').style.display = 'block';
-      document.getElementById('hud').style.display = 'block';
+      document.getElementById('topRightBar').style.display = 'flex';
       renderQuestPanel();
       updateHUD();
+      document.getElementById('helpPanel').innerHTML = isTouchDevice
+        ? '左下角搖桿：移動、轉向<br/>右側拉桿：縮放鏡頭<br/>右下角按鈕：跑步、灑錢'
+        : 'W / S：前進、後退<br/>A / D：左轉、右轉<br/>Shift：跑步<br/>F：灑錢<br/>滾輪：縮放';
       if (isTouchDevice) {
         document.getElementById('mobileControls').style.display = 'block';
-        document.getElementById('info').innerHTML =
-          '左下角搖桿：移動、轉向<br/>右下角按鈕：跑步、灑錢<br/>雙指縮放：拉近拉遠';
       }
-      document.getElementById('info').style.display = 'block';
     }
   }
 }
