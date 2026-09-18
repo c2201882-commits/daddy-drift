@@ -1041,7 +1041,7 @@ function spawnMotorcycles() {
     const dir = Math.random() < 0.5 ? 1 : -1;
     const mesh = makeMotorcycle(MOTORCYCLE_COLORS[Math.floor(Math.random() * MOTORCYCLE_COLORS.length)]);
     const along = -CITY_SIZE + Math.random() * CITY_SIZE * 2;
-    const cross0 = (Math.random() * 2 - 1) * (STREET_HALF_WIDTH - 1);
+    const cross0 = (Math.random() * 2 - 1) * (STREET_HALF_WIDTH - 2.2);
     if (axis === 'x') { mesh.position.set(along, 0, cross0); mesh.rotation.y = dir > 0 ? Math.PI / 2 : -Math.PI / 2; }
     else { mesh.position.set(cross0, 0, along); mesh.rotation.y = dir > 0 ? 0 : Math.PI; }
     scene.add(mesh);
@@ -1051,7 +1051,7 @@ function spawnMotorcycles() {
       cross0,
       wobblePhase: Math.random() * Math.PI * 2,
       wobbleSpeed: 1.5 + Math.random() * 1.5,
-      wobbleAmp: 1 + Math.random() * 1.5,
+      wobbleAmp: 0.5 + Math.random() * 1,
     });
   }
 }
@@ -1059,7 +1059,7 @@ function spawnMotorcycles() {
 function updateMotorcycles(delta) {
   motorcycles.forEach((m) => {
     m.wobblePhase += delta * m.wobbleSpeed;
-    const maxCross = STREET_HALF_WIDTH - 0.6;
+    const maxCross = STREET_HALF_WIDTH - 1.6; // stay well clear of the sidewalk curb at STREET_HALF_WIDTH
     const cross = THREE.MathUtils.clamp(m.cross0 + Math.sin(m.wobblePhase) * m.wobbleAmp, -maxCross, maxCross);
     if (m.axis === 'x') {
       m.mesh.position.x += m.dir * m.speed * delta;
@@ -1317,6 +1317,24 @@ function loadNPC(path, targetHeight = 1.8) {
             obj.receiveShadow = true;
           }
         });
+        // Some of these models (Gloria's, evidently) have their bind pose
+        // lying on their side — not standing — with an animation clip that
+        // rotates them upright as it plays. Looping that clip forever was
+        // the earlier fix's mistake: it looked fine briefly, then a full
+        // turntable rotation continued past "upright" the longer it played,
+        // eventually leaving her lying down again. The fix is to apply
+        // exactly frame 0 of the clip (which IS the upright pose) and then
+        // stop — never advancing again — before measuring/aligning
+        // anything below, so a corrected, permanently frozen pose is what
+        // gets scaled, ground-aligned, and cloned for portraits.
+        if (gltf.animations && gltf.animations.length > 0) {
+          const mx = new THREE.AnimationMixer(m);
+          const action = mx.clipAction(gltf.animations[0]);
+          action.play();
+          mx.update(0);
+          action.stop();
+        }
+
         const box = new THREE.Box3().setFromObject(m);
         const size = new THREE.Vector3();
         box.getSize(size);
@@ -1324,23 +1342,12 @@ function loadNPC(path, targetHeight = 1.8) {
         const box2 = new THREE.Box3().setFromObject(m);
         m.position.y -= box2.min.y;
 
-        // A pristine, never-animated clone taken right after load (before
-        // any mixer advances) — portraits always render from this instead
-        // of the live `m`, otherwise an idle/look-around clip can leave the
-        // head bone turned away from the portrait camera at whatever random
-        // moment the dialog happens to open, making the face intermittently
-        // disappear behind hair for reasons that have nothing to do with
-        // the deliberate rotationY framing.
+        // A clone taken now (frozen pose, ground-aligned) — portraits
+        // always render from this instead of the live `m`, and `m` itself
+        // is never animated further either, so nothing in the world can
+        // drift out of this pose over time.
         const portraitSource = cloneSkinned(m);
 
-        // Deliberately NOT auto-playing gltf.animations here (unlike the
-        // player's own model): whatever baked-in clip these came with — a
-        // turntable spin, in Gloria's case — plays forever regardless of
-        // what it actually does to the root transform, and over a long
-        // enough play session it visibly rotated her into lying on her
-        // side. Neither NPC needs a skeletal idle loop; they're static in
-        // the world already (portraits already used a frozen, unanimated
-        // clone for a related reason — see portraitSource above).
         resolve({ model: m, mixers: [], portraitSource });
       },
       undefined,
@@ -1800,6 +1807,44 @@ function setLyingDown(lying) {
   model.rotation.x = lying ? -Math.PI / 2 : 0;
 }
 
+// Step 0 (before any dialog): camera zooms in tight on the player's face,
+// who then slowly collapses onto the ground over the same stretch of time
+// — replaces an instant snap to lying down.
+const COLLAPSE_DURATION = 1.8;
+let collapseState = null;
+function runCollapse() {
+  return new Promise((resolve) => {
+    collapseState = {
+      startTime: clock.elapsedTime,
+      startCamPos: camera.position.clone(),
+      startCamLookAt: character.position.clone().add(new THREE.Vector3(0, 1.4, 0)),
+      resolve,
+    };
+    gameState = 'rescueCollapse';
+  });
+}
+function updateCollapse() {
+  if (gameState !== 'rescueCollapse' || !collapseState || !character || !model) return;
+  const s = collapseState;
+  const t = Math.min(1, (clock.elapsedTime - s.startTime) / COLLAPSE_DURATION);
+  const e = easeInOutCubic(t);
+
+  const closeUpPos = getTargetFrontCamPos(character).clone().lerp(character.position, 0.4).add(new THREE.Vector3(0, 0.6, 0));
+  const closeUpLookAt = character.position.clone().add(new THREE.Vector3(0, 1.3, 0));
+  camera.position.lerpVectors(s.startCamPos, closeUpPos, e);
+  const lookAt = new THREE.Vector3().lerpVectors(s.startCamLookAt, closeUpLookAt, e);
+  camera.lookAt(lookAt);
+
+  model.rotation.x = -Math.PI / 2 * e;
+
+  if (t >= 1) {
+    gameState = 'rescueSequence';
+    const resolve = s.resolve;
+    collapseState = null;
+    resolve();
+  }
+}
+
 // A flat dialog overlay (no 3D camera cutscene, unlike beginDialogCutscene)
 // — the rescue sequence manages gameState/camera itself throughout, so
 // this just shows text+portraits and resolves once the player confirms.
@@ -1961,9 +2006,9 @@ async function startHealingEvent() {
   if (isHealingEvent) return;
   isHealingEvent = true;
   gameState = 'rescueSequence';
-  setLyingDown(true);
+  await runCollapse();
   await Promise.all([npcReady, gloriaReady, characterReady]);
-  if (!character) { isHealingEvent = false; setLyingDown(false); gameState = 'playing'; return; }
+  if (!character) { isHealingEvent = false; gameState = 'playing'; return; }
 
   await showRescueLine('爹地', '痾…我快不行了…', modelPortraitSource, null);
   await showRescueLine('Julie & Gloria', '讓我來治癒你吧！', npcPortraitSource, gloriaPortraitSource);
@@ -2606,6 +2651,7 @@ function animate() {
   updateMoneyCinematic();
   updateDialogCinematic();
   updateHealingEvent();
+  updateCollapse();
   updateRescueWalkIn();
   updateCarDeparture();
   if (mixer) mixer.update(delta);
