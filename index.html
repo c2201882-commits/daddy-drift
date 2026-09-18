@@ -1851,7 +1851,8 @@ const HELL_ATTACK_COOLDOWN_MIN = 0.2;
 const HELL_ATTACK_COOLDOWN_MAX = 0.8; // averages ~0.5s between charges
 let pedestrianHellActive = false;
 let pedestrianHellStart = 0;
-let hellAttacker = null; // { m, timer }
+const MAX_HELL_ATTACKERS = 5; // how many can be charging at once
+let hellAttackers = []; // [{ m, endTime }]
 let hellNextAttackTime = 0;
 
 function startPedestrianHellQuest() {
@@ -1859,7 +1860,7 @@ function startPedestrianHellQuest() {
   updateHUD();
   pedestrianHellActive = true;
   pedestrianHellStart = clock.elapsedTime;
-  hellAttacker = null;
+  hellAttackers = [];
   hellNextAttackTime = clock.elapsedTime + 1;
   document.getElementById('hellBanner').style.display = 'flex';
 }
@@ -1877,37 +1878,40 @@ function updatePedestrianHell() {
 
 function updateHellAttacker() {
   if (!character) return;
-  if (hellAttacker) {
-    const outOfBounds = Math.abs(hellAttacker.m.mesh.position.x) > CITY_SIZE + 20
-      || Math.abs(hellAttacker.m.mesh.position.z) > CITY_SIZE + 20;
-    if (clock.elapsedTime >= hellAttacker.endTime || outOfBounds) {
-      hellAttacker.m.charging = false;
-      hellAttacker.m.chargeDir = null;
-      hellAttacker = null;
-      hellNextAttackTime = clock.elapsedTime + HELL_ATTACK_COOLDOWN_MIN + Math.random() * (HELL_ATTACK_COOLDOWN_MAX - HELL_ATTACK_COOLDOWN_MIN);
+
+  // Retire any attacker whose run has ended (timeout or off the map),
+  // freeing up a slot for a new one.
+  for (let i = hellAttackers.length - 1; i >= 0; i--) {
+    const a = hellAttackers[i];
+    const outOfBounds = Math.abs(a.m.mesh.position.x) > CITY_SIZE + 20
+      || Math.abs(a.m.mesh.position.z) > CITY_SIZE + 20;
+    if (clock.elapsedTime >= a.endTime || outOfBounds) {
+      a.m.charging = false;
+      a.m.chargeDir = null;
+      hellAttackers.splice(i, 1);
     }
-    return;
   }
+
+  if (hellAttackers.length >= MAX_HELL_ATTACKERS) return;
   if (clock.elapsedTime < hellNextAttackTime) return;
 
-  const candidate = motorcycles[Math.floor(Math.random() * motorcycles.length)];
+  const pool = motorcycles.filter((m) => !m.charging);
+  const candidate = pool[Math.floor(Math.random() * pool.length)];
   if (!candidate) return;
   const dx = character.position.x - candidate.mesh.position.x;
   const dz = character.position.z - candidate.mesh.position.z;
   const d = Math.hypot(dx, dz) || 1;
   candidate.charging = true;
   candidate.chargeDir = { x: dx / d, z: dz / d };
-  hellAttacker = { m: candidate, endTime: clock.elapsedTime + HELL_CHARGE_DURATION };
+  hellAttackers.push({ m: candidate, endTime: clock.elapsedTime + HELL_CHARGE_DURATION });
+  hellNextAttackTime = clock.elapsedTime + HELL_ATTACK_COOLDOWN_MIN + Math.random() * (HELL_ATTACK_COOLDOWN_MAX - HELL_ATTACK_COOLDOWN_MIN);
 }
 
 function endPedestrianHell(won) {
   pedestrianHellActive = false;
   document.getElementById('hellBanner').style.display = 'none';
-  if (hellAttacker) {
-    hellAttacker.m.charging = false;
-    hellAttacker.m.chargeDir = null;
-    hellAttacker = null;
-  }
+  hellAttackers.forEach((a) => { a.m.charging = false; a.m.chargeDir = null; });
+  hellAttackers = [];
   hp = 100;
   updateHUD();
   gameState = 'questComplete'; // freezes input until the result dialog is confirmed
