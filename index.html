@@ -1318,13 +1318,16 @@ function checkQuestProgress() {
       if (julliePhase === 'seek') {
         julliePhase = null;
         completeQuest('findJulie');
-        // Show the dialog immediately; she only runs off once the player
-        // dismisses it, not before — same pattern as every other story
-        // beat here, instead of running off underneath the dialog.
+        // Two dialogs in a row before she runs off: "found her" first, then
+        // a nudge toward the next quest — she only actually leaves once the
+        // SECOND one is dismissed, not before.
         gameState = 'questComplete'; // freezes player/traffic-hit input until confirmed
         showFoundOverlay('🎉 找到了！', '你成功找到了 Julie，任務完成！', () => {
-          startRunAway(npc);
-          addReportQuest();
+          gameState = 'questComplete';
+          showFoundOverlay('📋 下一步', '快去搜集你的收據來報帳吧！', () => {
+            startRunAway(npc);
+            addReportQuest();
+          });
         });
       } else if (julliePhase === 'deliver') {
         julliePhase = null;
