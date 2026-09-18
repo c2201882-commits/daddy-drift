@@ -139,6 +139,9 @@
   #questIntroDialog h3 { margin: 0 0 8px 0; font-size: 18px; }
   #questIntroDialog p { margin: 0 0 16px 0; line-height: 1.6; font-size: 15px; }
   #questPortrait { display: block; margin: 0 auto 10px; border-radius: 50%; background: #2a3a55; }
+  #questHintBox { display: none; margin: 0 0 14px 0; }
+  #questHintBox .label { font-size: 11px; opacity: 0.75; margin-bottom: 4px; }
+  #questHintPortrait { display: block; margin: 0 auto; border-radius: 50%; background: #2a3a55; border: 1px solid rgba(255,213,74,0.6); }
   #questDialogConfirm {
     padding: 10px 36px; font-size: 16px; font-weight: bold; color: #1b2a4a;
     background: #ffd54a; border: none; border-radius: 8px; cursor: pointer;
@@ -183,6 +186,10 @@
   <canvas id="questPortrait" width="120" height="120"></canvas>
   <h3 id="questDialogTitle"></h3>
   <p id="questDialogText"></p>
+  <div id="questHintBox">
+    <div class="label">提示：<span id="questHintLabel"></span> 長這樣</div>
+    <canvas id="questHintPortrait" width="70" height="70"></canvas>
+  </div>
   <button id="questDialogConfirm">確認</button>
 </div>
 <div id="mobileControls">
@@ -670,7 +677,7 @@ function aabbOverlap(a, b) {
 }
 
 function updateTraffic(delta) {
-  movingCars.forEach((car, idx) => {
+  movingCars.forEach((car) => {
     const { mesh, lane, speed } = car;
     const moveDist = speed * delta;
     let nextX = mesh.position.x, nextZ = mesh.position.z;
@@ -678,20 +685,14 @@ function updateTraffic(delta) {
     else nextZ += lane.dir * moveDist;
 
     const nextBox = carAABBAt(nextX, nextZ, lane.axis);
-    // Don't drive through parked cars/buildings (in `colliders`) or rear-end
-    // another car ahead in the same street — just wait this frame, like a
-    // car stuck in traffic, rather than clipping through. Only checked
-    // against cars on the SAME axis: without that restriction, two cars on
-    // perpendicular streets meeting at the intersection can each decide the
-    // other is blocking and wait forever, and since every car eventually
-    // passes through the same intersection, that deadlock spreads until the
-    // entire city's traffic is frozen there (this is what was making all
-    // moving cars vanish from the rest of the map over time).
-    const blocked =
-      colliders.some((c) => aabbOverlap(nextBox, c)) ||
-      movingCars.some((other, j) => j !== idx && other.lane.axis === lane.axis && aabbOverlap(
-        nextBox, carAABBAt(other.mesh.position.x, other.mesh.position.z, other.lane.axis)
-      ));
+    // Only checked against static colliders (buildings/parked cars), not
+    // other moving cars: checking moving-vs-moving used to let a couple of
+    // cars end up permanently nose-to-tail (most often right near the map
+    // edge, just before the wrap-around point), which then blocked every
+    // car behind them forever and looked like traffic "getting stuck at the
+    // boundary and never spawning again". Cars may now briefly overlap each
+    // other, but they never freeze in place.
+    const blocked = colliders.some((c) => aabbOverlap(nextBox, c));
 
     if (!blocked) {
       mesh.position.x = nextX;
@@ -803,7 +804,10 @@ function updatePickups(delta) {
       renderQuestPanel();
       scene.remove(p.mesh);
       pickups.splice(i, 1);
-      if (receiptCount >= RECEIPT_TARGET) startJulieDeliverPhase();
+      if (receiptCount >= RECEIPT_TARGET) {
+        gameState = 'questComplete'; // freezes input until confirmed
+        showFoundOverlay('📋 收集齊全！', '找到 Julie 交付報帳收據吧！', () => startJulieDeliverPhase());
+      }
       continue;
     }
     const pos = getRandomReachablePosition(0.6);
@@ -863,6 +867,7 @@ let dialogMode = null; // 'accept' | 'story'
 let pendingQuestId = null;
 let pendingConfirm = null;
 let pendingDialogTitle = '', pendingDialogText = '', pendingPortraitModel = null, pendingPortraitRotY = 0.4;
+let pendingHintModel = null, pendingHintRotY = 0.4, pendingHintLabel = '';
 
 // Camera position/lookAt for framing an arbitrary actor's face — same
 // convention as the character's own front view (rest pose faces +Z), but
@@ -874,7 +879,7 @@ function getTargetFrontLookAt(actor) {
   return actor.position.clone().add(new THREE.Vector3(0, 1.5, 0));
 }
 
-function beginDialogCutscene(target, title, text, portraitModel, mode, onConfirm, portraitRotY = 0.4) {
+function beginDialogCutscene(target, title, text, portraitModel, mode, onConfirm, portraitRotY = 0.4, hintModel = null, hintRotY = 0.4, hintLabel = '') {
   if (gameState !== 'playing' || !character || !target) return;
   cutsceneTarget = target;
   dialogMode = mode;
@@ -883,6 +888,9 @@ function beginDialogCutscene(target, title, text, portraitModel, mode, onConfirm
   pendingDialogText = text;
   pendingPortraitModel = portraitModel || null;
   pendingPortraitRotY = portraitRotY;
+  pendingHintModel = hintModel || null;
+  pendingHintRotY = hintRotY;
+  pendingHintLabel = hintLabel;
   gameState = 'dialogCamIn';
   cutsceneStart = clock.elapsedTime;
 }
@@ -891,7 +899,7 @@ function beginQuestIntro(id) {
   const q = quests[id];
   if (!q || q.state !== 'available' || gameState !== 'playing' || !character) return;
   pendingQuestId = id;
-  const portraitModel = id === 'findJulie' ? npc : id === 'findGloria' ? gloria : null;
+  const portraitModel = id === 'findJulie' ? npc : id === 'findGloria' ? gloria : id === 'reportReceipts' ? makeReceipt() : null;
   beginDialogCutscene(character, q.title, q.description, portraitModel, 'accept', null);
 }
 
@@ -910,6 +918,14 @@ function updateDialogCinematic() {
         renderPortraitOf(pendingPortraitModel, pendingPortraitRotY);
       } else {
         canvas.style.display = 'none';
+      }
+      const hintBox = document.getElementById('questHintBox');
+      if (pendingHintModel) {
+        hintBox.style.display = 'block';
+        document.getElementById('questHintLabel').textContent = pendingHintLabel;
+        renderHintPortraitOf(pendingHintModel, pendingHintRotY);
+      } else {
+        hintBox.style.display = 'none';
       }
       document.getElementById('questIntroDialog').style.display = 'block';
       gameState = 'dialogHold';
@@ -992,22 +1008,28 @@ loadNPC('./model/gloria.glb').then((res) => {
 // off-screen / not-yet-spawned) position in the main world. A plain
 // .clone(true) doesn't rebind a SkinnedMesh's skeleton, which leaves it
 // collapsed/invisible — SkeletonUtils' clone() handles that.
-let portraitRenderer = null, portraitScene = null, portraitCamera = null;
-function setupPortraitRig() {
-  const canvas = document.getElementById('questPortrait');
-  portraitRenderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
-  portraitRenderer.setSize(120, 120);
-  portraitScene = new THREE.Scene();
-  portraitScene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
+function createPortraitRig(canvasId, size) {
+  const canvas = document.getElementById(canvasId);
+  const renderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
+  renderer.setSize(size, size);
+  const scene = new THREE.Scene();
+  scene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
   const dirLight = new THREE.DirectionalLight(0xffffff, 1.4);
   dirLight.position.set(1, 2, 3);
-  portraitScene.add(dirLight);
-  portraitCamera = new THREE.PerspectiveCamera(28, 1, 0.1, 10);
+  scene.add(dirLight);
+  const camera = new THREE.PerspectiveCamera(28, 1, 0.1, 10);
+  return { renderer, scene, camera };
+}
+
+let mainPortraitRig = null, hintPortraitRig = null;
+function setupPortraitRig() {
+  mainPortraitRig = createPortraitRig('questPortrait', 120);
+  hintPortraitRig = createPortraitRig('questHintPortrait', 70);
 }
 setupPortraitRig();
 
-function renderPortraitOf(sourceModel, rotationY = 0.4) {
-  if (!portraitRenderer || !sourceModel) return;
+function renderIntoRig(rig, sourceModel, rotationY = 0.4) {
+  if (!rig || !sourceModel) return;
   const clone = cloneSkinned(sourceModel);
   clone.position.set(0, 0, 0);
   clone.rotation.y = rotationY; // slight turn; camera sits on the model's rest-facing (+Z) side
@@ -1024,15 +1046,16 @@ function renderPortraitOf(sourceModel, rotationY = 0.4) {
       });
     }
   });
-  portraitScene.add(clone);
+  rig.scene.add(clone);
 
   // Distance/framing is derived from the model's own footprint rather than
   // a fixed number — a hardcoded z=0.55 worked for human-proportioned
   // models but put the camera *inside* a wider/deeper model (rendering
   // nothing, since you were looking at the inside of its back-culled
   // faces). Tall-and-narrow models (people) get a tight head-and-shoulders
-  // crop; anything wider/flatter (not humanoid) gets framed so the whole
-  // model fits in view instead of guessing where its "face" is.
+  // crop; anything wider/flatter (not humanoid, or a small prop like a
+  // receipt) gets framed so the whole model fits in view instead of
+  // guessing where its "face" is.
   const box = new THREE.Box3().setFromObject(clone);
   const size = new THREE.Vector3();
   box.getSize(size);
@@ -1042,19 +1065,19 @@ function renderPortraitOf(sourceModel, rotationY = 0.4) {
   if (isHumanoid) {
     const headY = box.max.y - Math.min(0.14, size.y * 0.1);
     const camDist = Math.max(size.x, size.z) / 2 + 0.35;
-    portraitCamera.position.set(center.x, headY, center.z + camDist);
-    portraitCamera.lookAt(center.x, headY, center.z);
+    rig.camera.position.set(center.x, headY, center.z + camDist);
+    rig.camera.lookAt(center.x, headY, center.z);
   } else {
     const sphere = new THREE.Sphere();
     box.getBoundingSphere(sphere);
-    const fovRad = THREE.MathUtils.degToRad(portraitCamera.fov);
+    const fovRad = THREE.MathUtils.degToRad(rig.camera.fov);
     const camDist = (sphere.radius / Math.sin(fovRad / 2)) * 1.2;
-    portraitCamera.position.set(sphere.center.x, sphere.center.y, sphere.center.z + camDist);
-    portraitCamera.lookAt(sphere.center);
+    rig.camera.position.set(sphere.center.x, sphere.center.y, sphere.center.z + camDist);
+    rig.camera.lookAt(sphere.center);
   }
-  portraitRenderer.render(portraitScene, portraitCamera);
+  rig.renderer.render(rig.scene, rig.camera);
 
-  portraitScene.remove(clone);
+  rig.scene.remove(clone);
   clone.traverse((o) => {
     if (o.isMesh) {
       o.geometry.dispose();
@@ -1063,15 +1086,23 @@ function renderPortraitOf(sourceModel, rotationY = 0.4) {
   });
 }
 
+function renderPortraitOf(sourceModel, rotationY = 0.4) {
+  renderIntoRig(mainPortraitRig, sourceModel, rotationY);
+}
+function renderHintPortraitOf(sourceModel, rotationY = 0.4) {
+  renderIntoRig(hintPortraitRig, sourceModel, rotationY);
+}
+
 // --- NPCs running off after their part of the story is done ---
-const runningAwayNpcs = []; // { mesh, dir, speed, life }
-function startRunAway(npcMesh) {
+const runningAwayNpcs = []; // { mesh, dir, speed, life, onDone }
+function startRunAway(npcMesh, onDone) {
   const angle = Math.random() * Math.PI * 2;
   runningAwayNpcs.push({
     mesh: npcMesh,
     dir: new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle)),
     speed: 14,
     life: 0,
+    onDone: onDone || null,
   });
 }
 function updateRunningAwayNpcs(delta) {
@@ -1083,6 +1114,7 @@ function updateRunningAwayNpcs(delta) {
     if (r.life > 1.2) {
       scene.remove(r.mesh);
       runningAwayNpcs.splice(i, 1);
+      if (r.onDone) r.onDone();
     }
   }
 }
@@ -1214,15 +1246,22 @@ function checkQuestProgress() {
       if (julliePhase === 'seek') {
         julliePhase = null;
         completeQuest('findJulie');
-        startRunAway(npc);
-        gameState = 'questComplete'; // freezes player/traffic-hit input until confirmed
-        showFoundOverlay('🎉 找到了！', '你成功找到了 Julie，任務完成！', () => addReportQuest());
+        // Let her actually run off and disappear first — the "found!"
+        // dialog only pops up once she's gone, instead of covering the
+        // screen right as she starts running.
+        startRunAway(npc, () => {
+          gameState = 'questComplete'; // freezes player/traffic-hit input until confirmed
+          showFoundOverlay('🎉 找到了！', '你成功找到了 Julie，任務完成！', () => addReportQuest());
+        });
       } else if (julliePhase === 'deliver') {
         julliePhase = null;
+        // She turns her back (rotationY = PI, so the portrait shows the
+        // back of her head, not her face) while hinting at who to look for
+        // next — Gloria's own portrait is shown alongside as a preview.
         beginDialogCutscene(npc, 'Julie', '誒…還缺少機票的收據耶，這個要找 Gloria 拿！', npc, 'story', () => {
           completeQuest('reportReceipts');
           addFindGloriaQuest();
-        });
+        }, Math.PI, gloria, 0.4, 'Gloria');
       } else if (julliePhase === 'awaitReturn') {
         julliePhase = 'done';
         beginDialogCutscene(npc, 'Julie', '太好了，謝謝你！這是給你的獎勵！', npc, 'story', () => {
