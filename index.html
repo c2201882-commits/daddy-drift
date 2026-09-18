@@ -917,7 +917,7 @@ function beginQuestIntro(id) {
   const q = quests[id];
   if (!q || q.state !== 'available' || gameState !== 'playing' || !character) return;
   pendingQuestId = id;
-  const portraitModel = id === 'findJulie' ? npcPortraitSource : id === 'findGloria' ? gloriaPortraitSource : id === 'reportReceipts' ? makeReceipt() : null;
+  const portraitModel = q.portrait ? q.portrait() : null;
   beginDialogCutscene(character, q.title, q.description, portraitModel, 'accept', null);
 }
 
@@ -1165,15 +1165,69 @@ function showFoundOverlay(title, text, onConfirm) {
   document.getElementById('foundOverlay').style.display = 'flex';
 }
 
-const quests = {
+// --- Quest table -------------------------------------------------------
+// Every quest's display text and unlock behavior lives here, in one place.
+// `quests` (below) holds the LIVE state (which quests are currently
+// visible and their state: available/active/completed); this table is the
+// static definition they're built from.
+//
+// TO ADD A NEW QUEST:
+//   1. Add an entry below with a unique key: `title`, `hint` (string, or a
+//      function for text that updates live, e.g. a progress counter),
+//      `description` (shown in the accept-dialog), and optionally
+//      `portrait()` (returns a THREE.Object3D to preview in that dialog —
+//      omit for no portrait) and `onAccept()` (runs once the player clicks
+//      accept — spawn an NPC, scatter pickups, whatever the quest needs).
+//   2. Call `unlockQuest('yourKey')` from wherever the PREVIOUS step's
+//      completion logic should reveal it (see the beginDialogCutscene /
+//      showFoundOverlay callbacks in checkQuestProgress and updatePickups
+//      for the existing chain's examples).
+//   3. Write whatever completion-detection your quest needs — reaching an
+//      NPC (see checkQuestProgress's julliePhase/gloriaPhase pattern) or
+//      collecting N items (see updatePickups' receipt-counting branch) are
+//      the two patterns already used; copy whichever fits, or add a new
+//      one if the quest needs a different trigger entirely.
+//   Pass `{ state: 'active' }` as unlockQuest's second argument for a
+//   quest that should skip the accept dialog and start immediately (like
+//   returnToJulie below, which continues straight out of finding Gloria).
+const QUEST_TABLE = {
   findJulie: {
     title: '尋找 Julie',
     hint: '在城市裡找到她',
     description: 'Julie 藏在城市裡某個你走得到的地方，去把她找出來吧！',
-    state: 'available', // available | active | completed
+    portrait: () => npcPortraitSource,
     onAccept: () => startFindJulieQuest(),
   },
+  reportReceipts: {
+    title: '我要報帳',
+    hint: () => `收集報帳收據 (${receiptCount}/${RECEIPT_TARGET})`,
+    description: '爹地需要報帳！在城市裡找到 10 張報帳收據，收集齊全後再去找 Julie 交付。',
+    portrait: () => makeReceipt(),
+    onAccept: () => startReportReceiptsQuest(),
+  },
+  findGloria: {
+    title: '尋找 Gloria',
+    hint: '在城市裡找到她，拿到機票收據',
+    description: 'Julie 說機票收據要找 Gloria 拿，去城市裡找到她吧！',
+    portrait: () => gloriaPortraitSource,
+    onAccept: () => startFindGloriaQuest(),
+  },
+  returnToJulie: {
+    title: '交付機票收據',
+    hint: '回去把機票收據交給 Julie',
+  },
 };
+
+const quests = {}; // live quest state: { ...QUEST_TABLE[id], state, ... }
+
+function unlockQuest(id, overrides = {}) {
+  const def = QUEST_TABLE[id];
+  if (!def) { console.error('unlockQuest: unknown quest id', id); return; }
+  quests[id] = { ...def, state: 'available', ...overrides };
+  renderQuestPanel();
+}
+
+unlockQuest('findJulie');
 
 async function startFindJulieQuest() {
   await Promise.all([cityReady, npcReady, characterReady]);
@@ -1183,17 +1237,6 @@ async function startFindJulieQuest() {
   npc.rotation.y = Math.random() * Math.PI * 2;
   if (!npc.parent) scene.add(npc);
   julliePhase = 'seek';
-}
-
-function addReportQuest() {
-  quests.reportReceipts = {
-    title: '我要報帳',
-    hint: () => `收集報帳收據 (${receiptCount}/${RECEIPT_TARGET})`,
-    description: '爹地需要報帳！在城市裡找到 10 張報帳收據，收集齊全後再去找 Julie 交付。',
-    state: 'available',
-    onAccept: () => startReportReceiptsQuest(),
-  };
-  renderQuestPanel();
 }
 
 function startReportReceiptsQuest() {
@@ -1213,17 +1256,6 @@ function startJulieDeliverPhase() {
   renderQuestPanel();
 }
 
-function addFindGloriaQuest() {
-  quests.findGloria = {
-    title: '尋找 Gloria',
-    hint: '在城市裡找到她，拿到機票收據',
-    description: 'Julie 說機票收據要找 Gloria 拿，去城市裡找到她吧！',
-    state: 'available',
-    onAccept: () => startFindGloriaQuest(),
-  };
-  renderQuestPanel();
-}
-
 async function startFindGloriaQuest() {
   await Promise.all([cityReady, gloriaReady, characterReady]);
   const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
@@ -1232,16 +1264,6 @@ async function startFindGloriaQuest() {
   gloria.rotation.y = Math.random() * Math.PI * 2;
   if (!gloria.parent) scene.add(gloria);
   gloriaPhase = 'seek';
-}
-
-function addReturnToJulieQuest() {
-  quests.returnToJulie = {
-    title: '交付機票收據',
-    hint: '回去把機票收據交給 Julie',
-    state: 'active',
-  };
-  julliePhase = 'awaitReturn';
-  renderQuestPanel();
 }
 
 // A big burst of bills raining down from above the character — the reward
@@ -1326,7 +1348,7 @@ function checkQuestProgress() {
           gameState = 'questComplete';
           showFoundOverlay('📋 下一步', '快去搜集你的收據來報帳吧！', () => {
             startRunAway(npc);
-            addReportQuest();
+            unlockQuest('reportReceipts');
           });
         });
       } else if (julliePhase === 'deliver') {
@@ -1339,7 +1361,7 @@ function checkQuestProgress() {
         // idle animation can't leave the head turned away from the camera.
         beginDialogCutscene(npc, 'Julie', '誒…還缺少機票的收據耶，這個要找 Gloria 拿！', npcPortraitSource, 'story', () => {
           completeQuest('reportReceipts');
-          addFindGloriaQuest();
+          unlockQuest('findGloria');
         }, Math.PI, gloriaPortraitSource, 0.4, 'Gloria');
       } else if (julliePhase === 'awaitReturn') {
         julliePhase = 'done';
@@ -1361,7 +1383,11 @@ function checkQuestProgress() {
         completeQuest('findGloria');
         hasTicket = true;
         startRunAway(gloria);
-        addReturnToJulieQuest();
+        // Skips the accept dialog — it continues straight out of finding
+        // Gloria, becoming active immediately rather than sitting in the
+        // panel waiting to be clicked.
+        unlockQuest('returnToJulie', { state: 'active' });
+        julliePhase = 'awaitReturn';
       });
     }
   }
