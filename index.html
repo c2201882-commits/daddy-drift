@@ -42,20 +42,6 @@
   .quest-row.quest-active { background: rgba(80,160,255,0.22); }
   .quest-row.quest-completed { opacity: 0.55; text-decoration: line-through; }
   .quest-row .quest-hint { display: block; font-size: 11px; opacity: 0.75; margin-top: 2px; }
-  #questArrow {
-    position: fixed; top: 90px; left: 50%; transform: translateX(-50%);
-    z-index: 10; display: none; flex-direction: column; align-items: center;
-    pointer-events: none;
-  }
-  #questArrowIcon {
-    font-size: 34px; line-height: 1; color: #ffd54a;
-    text-shadow: 0 0 6px rgba(0,0,0,0.7), 0 0 2px rgba(0,0,0,0.9);
-    transition: transform 0.15s linear;
-  }
-  #questArrowDist {
-    margin-top: 2px; font-size: 12px; color: #fff; background: rgba(0,0,0,0.55);
-    padding: 2px 9px; border-radius: 10px;
-  }
   #hud {
     background: rgba(0,0,0,0.55); color: #fff; border-radius: 10px; padding: 10px 14px;
     font-size: 13px; min-width: 160px;
@@ -182,10 +168,6 @@
 <div id="questPanel">
   <h3>任務</h3>
   <div id="questList"></div>
-</div>
-<div id="questArrow">
-  <div id="questArrowIcon">▲</div>
-  <div id="questArrowDist"></div>
 </div>
 <div id="topRightBar">
   <button id="helpBtn">？</button>
@@ -1333,12 +1315,23 @@ function loadNPC(path, targetHeight = 1.8) {
           action.play();
           mx.update(0);
           action.stop();
+          // The mixer only updates the animated properties (position/
+          // quaternion/scale) — matrixWorld itself is normally refreshed
+          // by the renderer each frame, not synchronously here. Without
+          // forcing it now, the Box3 measurements below silently used the
+          // *previous* (bind-pose) world matrices regardless of the pose
+          // just applied above, which is why the ground-alignment came out
+          // wrong even after "fixing" the pose — the two were computed
+          // from different transforms.
+          m.updateMatrixWorld(true);
         }
 
+        m.updateMatrixWorld(true);
         const box = new THREE.Box3().setFromObject(m);
         const size = new THREE.Vector3();
         box.getSize(size);
         m.scale.setScalar(targetHeight / (size.y || 1));
+        m.updateMatrixWorld(true);
         const box2 = new THREE.Box3().setFromObject(m);
         m.position.y -= box2.min.y;
 
@@ -1579,7 +1572,8 @@ unlockQuest('findJulie');
 async function startFindJulieQuest() {
   await Promise.all([cityReady, npcReady, characterReady]);
   const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
-  npc.position.set(pos.x, 0, pos.z);
+  npc.position.x = pos.x;
+  npc.position.z = pos.z; // never touch .y — loadNPC's ground-alignment offset lives there
   npc.rotation.y = Math.random() * Math.PI * 2;
   if (!npc.parent) scene.add(npc);
   julliePhase = 'seek';
@@ -1593,7 +1587,8 @@ function startReportReceiptsQuest() {
 
 function startJulieDeliverPhase() {
   const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
-  npc.position.set(pos.x, 0, pos.z);
+  npc.position.x = pos.x;
+  npc.position.z = pos.z;
   npc.rotation.y = Math.random() * Math.PI * 2;
   if (!npc.parent) scene.add(npc);
   julliePhase = 'deliver';
@@ -1604,7 +1599,8 @@ function startJulieDeliverPhase() {
 async function startFindGloriaQuest() {
   await Promise.all([cityReady, gloriaReady, characterReady]);
   const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
-  gloria.position.set(pos.x, 0, pos.z);
+  gloria.position.x = pos.x;
+  gloria.position.z = pos.z;
   gloria.rotation.y = Math.random() * Math.PI * 2;
   if (!gloria.parent) scene.add(gloria);
   gloriaPhase = 'seek';
@@ -1631,49 +1627,6 @@ function triggerMoneyRain(count = 70) {
     scene.add(bill);
     moneyParticles.push({ mesh: bill, velocity, life: 0 });
   }
-}
-
-// --- On-screen quest arrow ---
-// Points from the player's current facing toward whatever the active quest
-// step wants next — Julie, Gloria, or (while collecting) the nearest
-// remaining receipt — so the player doesn't have to wander the city blind.
-function getCurrentQuestTargetPos() {
-  if (npc && julliePhase) return npc.position;
-  if (gloria && gloriaPhase === 'seek') return gloria.position;
-  if (character && quests.reportReceipts && quests.reportReceipts.state === 'active') {
-    let nearest = null;
-    let nearestDist = Infinity;
-    for (const p of pickups) {
-      if (p.type !== 'receipt') continue;
-      const d = Math.hypot(character.position.x - p.mesh.position.x, character.position.z - p.mesh.position.z);
-      if (d < nearestDist) { nearestDist = d; nearest = p.mesh.position; }
-    }
-    return nearest;
-  }
-  return null;
-}
-
-function updateQuestArrow() {
-  const arrowEl = document.getElementById('questArrow');
-  const target = character ? getCurrentQuestTargetPos() : null;
-  if (!target) {
-    arrowEl.style.display = 'none';
-    return;
-  }
-  const dx = target.x - character.position.x;
-  const dz = target.z - character.position.z;
-  const dist = Math.hypot(dx, dz);
-  const targetAngle = Math.atan2(dx, dz);
-  // Relative to the character's own facing (which the gameplay camera is
-  // rigidly locked behind), normalized to -180..180 so the icon always
-  // rotates the short way around instead of snapping past 180°.
-  let rel = targetAngle - character.rotation.y;
-  rel = THREE.MathUtils.euclideanModulo(rel + Math.PI, Math.PI * 2) - Math.PI;
-  const deg = THREE.MathUtils.radToDeg(rel);
-
-  arrowEl.style.display = 'flex';
-  document.getElementById('questArrowIcon').style.transform = `rotate(${deg}deg)`;
-  document.getElementById('questArrowDist').textContent = `${Math.round(dist)}m`;
 }
 
 function checkQuestProgress() {
@@ -1879,8 +1832,12 @@ function runRescueWalkIn() {
     if (outward.lengthSq() < 1) outward.set(Math.sin(character.rotation.y), 0, Math.cos(character.rotation.y));
     outward.normalize();
     const spawnPoint = character.position.clone().addScaledVector(outward, 30);
-    npc.position.set(spawnPoint.x + 1.2, 0, spawnPoint.z);
-    gloria.position.set(spawnPoint.x - 1.2, 0, spawnPoint.z);
+    // Only x/z — each model's own .y is loadNPC's ground-alignment offset
+    // (not necessarily 0; Gloria's statue model needs a sizeable one).
+    npc.position.x = spawnPoint.x + 1.2;
+    npc.position.z = spawnPoint.z;
+    gloria.position.x = spawnPoint.x - 1.2;
+    gloria.position.z = spawnPoint.z;
     if (!npc.parent) scene.add(npc);
     if (!gloria.parent) scene.add(gloria);
 
@@ -1902,12 +1859,14 @@ function updateRescueWalkIn() {
   const e = easeInOutCubic(t);
   const baseAngle = character.rotation.y;
   const dist = 1.6;
+  // Keep each model at its own loadNPC ground-alignment y throughout —
+  // never lerp toward a literal 0, which isn't Gloria's correct baseline.
   const targetNpc = new THREE.Vector3(
-    character.position.x + Math.sin(baseAngle + 0.6) * dist, 0,
+    character.position.x + Math.sin(baseAngle + 0.6) * dist, s.startNpcPos.y,
     character.position.z + Math.cos(baseAngle + 0.6) * dist
   );
   const targetGloria = new THREE.Vector3(
-    character.position.x + Math.sin(baseAngle - 0.6) * dist, 0,
+    character.position.x + Math.sin(baseAngle - 0.6) * dist, s.startGloriaPos.y,
     character.position.z + Math.cos(baseAngle - 0.6) * dist
   );
   npc.position.lerpVectors(s.startNpcPos, targetNpc, e);
@@ -2666,9 +2625,6 @@ function animate() {
     checkQuestProgress();
     updateTrafficCollisions();
     updatePickups(delta);
-    updateQuestArrow();
-  } else {
-    document.getElementById('questArrow').style.display = 'none';
   }
 
   renderer.render(scene, camera);
