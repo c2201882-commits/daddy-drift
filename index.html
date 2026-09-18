@@ -150,6 +150,14 @@
     padding: 16px 32px; border-radius: 12px; border: 2px solid #7CFC9A;
     font-size: 20px; font-weight: bold; text-align: center;
   }
+  #hellBanner {
+    position: fixed; top: 10px; left: 50%; transform: translateX(-50%);
+    z-index: 25; display: none; flex-direction: column; align-items: center;
+    background: rgba(60, 10, 10, 0.85); color: #ff6b6b;
+    padding: 8px 24px; border-radius: 12px; border: 2px solid #ff3b30;
+    font-size: 14px; font-weight: bold; text-align: center; pointer-events: none;
+  }
+  #hellTimer { font-size: 26px; margin-top: 2px; }
   #questIntroDialog {
     position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
     z-index: 25; display: none; background: rgba(20, 20, 30, 0.92); color: #fff;
@@ -208,6 +216,10 @@
 </div>
 <div id="moneyDialog">爹地好開心</div>
 <div id="healingBanner">💚 治癒中...</div>
+<div id="hellBanner">
+  <div>🚗💥 行人地獄</div>
+  <div id="hellTimer">30s</div>
+</div>
 <div id="questIntroDialog">
   <div id="questPortraitRow">
     <canvas id="questPortrait" width="120" height="120"></canvas>
@@ -945,12 +957,26 @@ function aabbOverlap(a, b) {
 function updateTraffic(delta) {
   movingCars.forEach((car) => {
     const { mesh, lane, speed } = car;
-    const moveDist = speed * delta;
     let nextX = mesh.position.x, nextZ = mesh.position.z;
-    if (lane.axis === 'x') nextX += lane.dir * moveDist;
-    else nextZ += lane.dir * moveDist;
+    let axisForBox = lane.axis;
 
-    const nextBox = carAABBAt(nextX, nextZ, lane.axis);
+    if (pedestrianHellActive && character) {
+      // 行人地獄: every car abandons its lane and beelines for the player
+      // instead, ignoring lane discipline entirely.
+      const dx = character.position.x - mesh.position.x;
+      const dz = character.position.z - mesh.position.z;
+      const d = Math.hypot(dx, dz) || 1;
+      nextX += (dx / d) * speed * delta;
+      nextZ += (dz / d) * speed * delta;
+      mesh.rotation.y = Math.atan2(dx, dz);
+      axisForBox = Math.abs(dx) > Math.abs(dz) ? 'x' : 'z';
+    } else {
+      const moveDist = speed * delta;
+      if (lane.axis === 'x') nextX += lane.dir * moveDist;
+      else nextZ += lane.dir * moveDist;
+    }
+
+    const nextBox = carAABBAt(nextX, nextZ, axisForBox);
     // Only checked against static colliders (buildings/parked cars), not
     // other moving cars: checking moving-vs-moving used to let a couple of
     // cars end up permanently nose-to-tail (most often right near the map
@@ -965,6 +991,7 @@ function updateTraffic(delta) {
       mesh.position.z = nextZ;
     }
 
+    if (pedestrianHellActive) return; // no lane wrap-around while chasing
     if (mesh.position.x > CITY_SIZE) mesh.position.x = -CITY_SIZE;
     if (mesh.position.x < -CITY_SIZE) mesh.position.x = CITY_SIZE;
     if (mesh.position.z > CITY_SIZE) mesh.position.z = -CITY_SIZE;
@@ -1058,6 +1085,16 @@ function spawnMotorcycles() {
 
 function updateMotorcycles(delta) {
   motorcycles.forEach((m) => {
+    if (pedestrianHellActive && character) {
+      // 行人地獄: same beeline-for-the-player override as the cars.
+      const dx = character.position.x - m.mesh.position.x;
+      const dz = character.position.z - m.mesh.position.z;
+      const d = Math.hypot(dx, dz) || 1;
+      m.mesh.position.x += (dx / d) * m.speed * delta;
+      m.mesh.position.z += (dz / d) * m.speed * delta;
+      m.mesh.rotation.y = Math.atan2(dx, dz);
+      return;
+    }
     m.wobblePhase += delta * m.wobbleSpeed;
     const maxCross = STREET_HALF_WIDTH - 1.6; // stay well clear of the sidewalk curb at STREET_HALF_WIDTH
     const cross = THREE.MathUtils.clamp(m.cross0 + Math.sin(m.wobblePhase) * m.wobbleAmp, -maxCross, maxCross);
@@ -1574,6 +1611,12 @@ const QUEST_TABLE = {
     title: '交付機票收據',
     hint: '回去把機票收據交給 Julie',
   },
+  pedestrianHell: {
+    title: '行人地獄',
+    hint: '存活 30 秒，躲避追撞的汽車與摩托車',
+    description: '任務開始後，城裡每一台汽車與摩托車都會想盡辦法衝過來撞你！每撞到一次扣 10 血，撐過 30 秒就過關，血量歸零則任務失敗。',
+    onAccept: () => startPedestrianHellQuest(),
+  },
 };
 
 const quests = {}; // live quest state: { ...QUEST_TABLE[id], state, ... }
@@ -1586,6 +1629,7 @@ function unlockQuest(id, overrides = {}) {
 }
 
 unlockQuest('findJulie');
+unlockQuest('pedestrianHell');
 
 async function startFindJulieQuest() {
   await Promise.all([cityReady, npcReady, characterReady]);
@@ -1787,7 +1831,10 @@ function takeDamage(amount) {
   if (isHealingEvent) return; // safe while Julie & Gloria are tending to the player
   hp = Math.max(0, hp - amount);
   updateHUD();
-  if (hp <= 0 && gameState === 'playing') startHealingEvent();
+  if (hp <= 0 && gameState === 'playing') {
+    if (pedestrianHellActive) endPedestrianHell(false);
+    else startHealingEvent();
+  }
 }
 function heal(amount) {
   if (hp >= 100) return false;
@@ -1798,6 +1845,50 @@ function heal(amount) {
 function addMoney(amount) {
   money += amount;
   updateHUD();
+}
+
+// --- 行人地獄 minigame ---
+// While active, every car/motorcycle (see updateTraffic/updateMotorcycles)
+// abandons its normal lane behavior and beelines straight for the player
+// instead. Survive PEDESTRIAN_HELL_DURATION seconds to win; hitting 0 HP
+// while this is active fails the quest outright instead of triggering the
+// normal Julie/Gloria rescue (see takeDamage).
+const PEDESTRIAN_HELL_DURATION = 30;
+let pedestrianHellActive = false;
+let pedestrianHellStart = 0;
+
+function startPedestrianHellQuest() {
+  hp = 100;
+  updateHUD();
+  pedestrianHellActive = true;
+  pedestrianHellStart = clock.elapsedTime;
+  document.getElementById('hellBanner').style.display = 'flex';
+}
+
+function updatePedestrianHell() {
+  if (!pedestrianHellActive) return;
+  const remaining = PEDESTRIAN_HELL_DURATION - (clock.elapsedTime - pedestrianHellStart);
+  if (remaining <= 0) {
+    endPedestrianHell(true);
+    return;
+  }
+  document.getElementById('hellTimer').textContent = `${Math.ceil(remaining)}s`;
+}
+
+function endPedestrianHell(won) {
+  pedestrianHellActive = false;
+  document.getElementById('hellBanner').style.display = 'none';
+  hp = 100;
+  updateHUD();
+  gameState = 'questComplete'; // freezes input until the result dialog is confirmed
+  if (won) {
+    completeQuest('pedestrianHell');
+    showFoundOverlay('🎉 挑戰成功！', '你撐過了 30 秒的行人地獄！', () => {});
+  } else {
+    showFoundOverlay('💀 任務失敗', '血量歸零了……要再挑戰一次嗎？可以到任務欄重新接受任務。', () => {
+      unlockQuest('pedestrianHell');
+    });
+  }
 }
 
 // --- Running out of HP: a full scripted rescue sequence ---
@@ -2708,6 +2799,7 @@ function animate() {
     updateTrafficCollisions();
     updatePickups(delta);
     updateQuestArrow();
+    updatePedestrianHell();
   } else {
     document.getElementById('questArrow').style.display = 'none';
   }
