@@ -158,7 +158,8 @@
   }
   #questIntroDialog h3 { margin: 0 0 8px 0; font-size: 18px; }
   #questIntroDialog p { margin: 0 0 16px 0; line-height: 1.6; font-size: 15px; }
-  #questPortrait { display: block; margin: 0 auto 10px; border-radius: 50%; background: #2a3a55; }
+  #questPortraitRow { display: flex; justify-content: center; align-items: center; gap: 14px; margin-bottom: 10px; }
+  #questPortrait, #questPortrait2 { display: none; border-radius: 50%; background: #2a3a55; }
   #questHintBox { display: none; margin: 0 0 14px 0; }
   #questHintBox .label { font-size: 11px; opacity: 0.75; margin-bottom: 4px; }
   #questHintPortrait { display: block; margin: 0 auto; border-radius: 50%; background: #2a3a55; border: 1px solid rgba(255,213,74,0.6); }
@@ -208,7 +209,10 @@
 <div id="moneyDialog">爹地好開心</div>
 <div id="healingBanner">💚 治癒中...</div>
 <div id="questIntroDialog">
-  <canvas id="questPortrait" width="120" height="120"></canvas>
+  <div id="questPortraitRow">
+    <canvas id="questPortrait" width="120" height="120"></canvas>
+    <canvas id="questPortrait2" width="120" height="120"></canvas>
+  </div>
   <h3 id="questDialogTitle"></h3>
   <p id="questDialogText"></p>
   <div id="questHintBox">
@@ -1181,6 +1185,7 @@ function updateDialogCinematic() {
       } else {
         canvas.style.display = 'none';
       }
+      document.getElementById('questPortrait2').style.display = 'none'; // only showRescueLine's dual-speaker lines use this one
       const hintBox = document.getElementById('questHintBox');
       if (pendingHintModel) {
         hintBox.style.display = 'block';
@@ -1294,10 +1299,11 @@ function createPortraitRig(canvasId, size) {
   return { renderer, scene, camera };
 }
 
-let mainPortraitRig = null, hintPortraitRig = null;
+let mainPortraitRig = null, hintPortraitRig = null, portraitRig2 = null;
 function setupPortraitRig() {
   mainPortraitRig = createPortraitRig('questPortrait', 120);
   hintPortraitRig = createPortraitRig('questHintPortrait', 70);
+  portraitRig2 = createPortraitRig('questPortrait2', 120);
 }
 setupPortraitRig();
 
@@ -1364,6 +1370,9 @@ function renderPortraitOf(sourceModel, rotationY = 0.4) {
 }
 function renderHintPortraitOf(sourceModel, rotationY = 0.4) {
   renderIntoRig(hintPortraitRig, sourceModel, rotationY);
+}
+function renderPortraitOf2(sourceModel, rotationY = 0.4) {
+  renderIntoRig(portraitRig2, sourceModel, rotationY);
 }
 
 // --- NPCs running off after their part of the story is done ---
@@ -1476,8 +1485,7 @@ unlockQuest('findJulie');
 async function startFindJulieQuest() {
   await Promise.all([cityReady, npcReady, characterReady]);
   const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
-  npc.position.x = pos.x;
-  npc.position.z = pos.z;
+  npc.position.set(pos.x, 0, pos.z);
   npc.rotation.y = Math.random() * Math.PI * 2;
   if (!npc.parent) scene.add(npc);
   julliePhase = 'seek';
@@ -1491,8 +1499,7 @@ function startReportReceiptsQuest() {
 
 function startJulieDeliverPhase() {
   const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
-  npc.position.x = pos.x;
-  npc.position.z = pos.z;
+  npc.position.set(pos.x, 0, pos.z);
   npc.rotation.y = Math.random() * Math.PI * 2;
   if (!npc.parent) scene.add(npc);
   julliePhase = 'deliver';
@@ -1503,8 +1510,7 @@ function startJulieDeliverPhase() {
 async function startFindGloriaQuest() {
   await Promise.all([cityReady, gloriaReady, characterReady]);
   const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
-  gloria.position.x = pos.x;
-  gloria.position.z = pos.z;
+  gloria.position.set(pos.x, 0, pos.z);
   gloria.rotation.y = Math.random() * Math.PI * 2;
   if (!gloria.parent) scene.add(gloria);
   gloriaPhase = 'seek';
@@ -1686,63 +1692,203 @@ function addMoney(amount) {
   updateHUD();
 }
 
-// --- Running out of HP: Julie & Gloria rush over and heal the player ---
-// Freezes play (gameState 'healing' — everything gated on 'playing' stops,
-// same mechanism as every other cutscene) for HEALING_DURATION seconds,
-// full-heals, then the two of them leave together by car. Reuses whichever
-// npc/gloria instances already exist in the world regardless of where the
-// 我要報帳 quest chain currently has them — they're repositioned right next
-// to the player either way.
-const HEALING_DURATION = 10;
+// --- Running out of HP: a full scripted rescue sequence ---
+// 1. The player's own line ("我快不行了"). 2. Julie & Gloria's reply,
+// heard before they're even visible. 3. They appear near the map boundary
+// and walk in, camera tracking them. 4. They reach the player and announce
+// the heal. 5. A 10s "治癒中" countdown, full-heals. 6. A parting line.
+// 7. A car drives up, they board, and drive off together — control returns
+// to the player only then. `isHealingEvent` spans the whole thing, guarding
+// takeDamage() from re-triggering mid-sequence. Reuses whichever npc/gloria
+// instances already exist regardless of where the 我要報帳 quest chain
+// currently has them.
 let isHealingEvent = false;
-let healingStart = 0;
 
-async function startHealingEvent() {
-  isHealingEvent = true;
-  gameState = 'healing';
-  await Promise.all([npcReady, gloriaReady, characterReady]);
-  if (!character) return;
+// Tips the player's model onto its side at 0 HP, for the duration of the
+// rescue sequence — updateCharacter (which drives the normal idle/walk
+// pose) is skipped the whole time anyway, since gameState is never
+// 'playing' during any of it, so nothing fights this rotation.
+function setLyingDown(lying) {
+  if (!model) return;
+  model.rotation.x = lying ? -Math.PI / 2 : 0;
+}
+
+// A flat dialog overlay (no 3D camera cutscene, unlike beginDialogCutscene)
+// — the rescue sequence manages gameState/camera itself throughout, so
+// this just shows text+portraits and resolves once the player confirms.
+// `portraitModel2` shows a second, equally-sized portrait beside the first
+// (both speaking together — Julie & Gloria's lines), as opposed to
+// beginQuestIntro's small "提示" thumbnail (one character mentioning what
+// another looks like). Never both at once.
+function showRescueLine(title, text, portraitModel, portraitModel2) {
+  return new Promise((resolve) => {
+    document.getElementById('questDialogTitle').textContent = title;
+    document.getElementById('questDialogText').textContent = text;
+    const canvas = document.getElementById('questPortrait');
+    if (portraitModel) { canvas.style.display = 'block'; renderPortraitOf(portraitModel, 0.4); }
+    else canvas.style.display = 'none';
+    const canvas2 = document.getElementById('questPortrait2');
+    if (portraitModel2) { canvas2.style.display = 'block'; renderPortraitOf2(portraitModel2, 0.4); }
+    else canvas2.style.display = 'none';
+    document.getElementById('questHintBox').style.display = 'none';
+    document.getElementById('questIntroDialog').style.display = 'block';
+    dialogMode = 'rescue';
+    pendingConfirm = resolve;
+  });
+}
+
+// Step 3: Julie & Gloria spawn out past the paved city (roughly where the
+// player currently is, projected out toward the tree ring) and walk in,
+// camera trailing behind them looking at their midpoint the whole way.
+let rescueWalkInState = null;
+function runRescueWalkIn() {
+  return new Promise((resolve) => {
+    const outward = new THREE.Vector3(character.position.x, 0, character.position.z);
+    if (outward.lengthSq() < 1) outward.set(Math.sin(character.rotation.y), 0, Math.cos(character.rotation.y));
+    outward.normalize();
+    const spawnPoint = character.position.clone().addScaledVector(outward, 30);
+    npc.position.set(spawnPoint.x + 1.2, 0, spawnPoint.z);
+    gloria.position.set(spawnPoint.x - 1.2, 0, spawnPoint.z);
+    if (!npc.parent) scene.add(npc);
+    if (!gloria.parent) scene.add(gloria);
+
+    rescueWalkInState = {
+      startTime: clock.elapsedTime,
+      duration: 4.5,
+      startNpcPos: npc.position.clone(),
+      startGloriaPos: gloria.position.clone(),
+      resolve,
+    };
+    gameState = 'rescueWalkIn';
+  });
+}
+
+function updateRescueWalkIn() {
+  if (gameState !== 'rescueWalkIn' || !rescueWalkInState || !character) return;
+  const s = rescueWalkInState;
+  const t = Math.min(1, (clock.elapsedTime - s.startTime) / s.duration);
+  const e = easeInOutCubic(t);
   const baseAngle = character.rotation.y;
   const dist = 1.6;
-  npc.position.set(
+  const targetNpc = new THREE.Vector3(
     character.position.x + Math.sin(baseAngle + 0.6) * dist, 0,
     character.position.z + Math.cos(baseAngle + 0.6) * dist
   );
-  npc.rotation.y = baseAngle + Math.PI;
-  gloria.position.set(
+  const targetGloria = new THREE.Vector3(
     character.position.x + Math.sin(baseAngle - 0.6) * dist, 0,
     character.position.z + Math.cos(baseAngle - 0.6) * dist
   );
-  gloria.rotation.y = baseAngle + Math.PI;
-  if (!npc.parent) scene.add(npc);
-  if (!gloria.parent) scene.add(gloria);
+  npc.position.lerpVectors(s.startNpcPos, targetNpc, e);
+  gloria.position.lerpVectors(s.startGloriaPos, targetGloria, e);
+  const facing = Math.atan2(targetNpc.x - s.startNpcPos.x, targetNpc.z - s.startNpcPos.z);
+  npc.rotation.y = facing;
+  gloria.rotation.y = facing;
 
-  document.getElementById('healingBanner').style.display = 'block';
-  healingStart = clock.elapsedTime;
+  // Camera trails behind the pair as they approach, always framing their
+  // midpoint — "鏡頭跟隨著 Julie 和 Gloria".
+  const mid = new THREE.Vector3().addVectors(npc.position, gloria.position).multiplyScalar(0.5);
+  const behind = new THREE.Vector3(character.position.x - mid.x, 0, character.position.z - mid.z);
+  if (behind.lengthSq() < 0.01) behind.set(0, 0, 1); else behind.normalize();
+  const camPos = mid.clone().addScaledVector(behind, -7).add(new THREE.Vector3(0, 3.2, 0));
+  camera.position.lerp(camPos, 0.06);
+  camera.lookAt(mid.x, 1.4, mid.z);
+
+  if (t >= 1) {
+    gameState = 'rescueSequence';
+    const resolve = s.resolve;
+    rescueWalkInState = null;
+    resolve();
+  }
 }
 
+// Step 5: the 10s "治癒中" countdown, reusing the HP bar's own full-heal.
+const HEALING_DURATION = 10;
+let healingStart = 0;
+let healingResolve = null;
+function runHealingCountdown() {
+  return new Promise((resolve) => {
+    document.getElementById('healingBanner').style.display = 'block';
+    healingStart = clock.elapsedTime;
+    healingResolve = resolve;
+    gameState = 'healing';
+  });
+}
 function updateHealingEvent() {
   if (gameState !== 'healing') return;
   if (clock.elapsedTime - healingStart >= HEALING_DURATION) {
     hp = 100;
     updateHUD();
     document.getElementById('healingBanner').style.display = 'none';
-    isHealingEvent = false;
-    driveNpcsAway([npc, gloria]);
-    gameState = 'playing';
+    gameState = 'rescueSequence';
+    const resolve = healingResolve;
+    healingResolve = null;
+    if (resolve) resolve();
   }
 }
 
-// They "get in a car" (removed from the scene) and drive off together,
-// reusing the same run-off-and-vanish animation as every other NPC exit.
-function driveNpcsAway(actors) {
-  const origin = actors.find(Boolean);
-  actors.forEach((a) => { if (a && a.parent) scene.remove(a); });
-  const car = makeCar(0xdedede);
-  if (origin) car.position.copy(origin.position);
-  car.position.y = 0;
-  scene.add(car);
-  startRunAway(car);
+// Step 7: a car drives in to where Julie & Gloria are standing, they board
+// (removed from the scene), then it drives off — reusing the same
+// run-off-and-vanish animation as every other NPC exit.
+let carDepartureState = null;
+function runCarDeparture() {
+  return new Promise((resolve) => {
+    const midX = (npc.position.x + gloria.position.x) / 2;
+    const midZ = (npc.position.z + gloria.position.z) / 2;
+    const angle = Math.random() * Math.PI * 2;
+    const car = makeCar(0xdedede);
+    const startPos = new THREE.Vector3(midX + Math.sin(angle) * 10, 0, midZ + Math.cos(angle) * 10);
+    car.position.copy(startPos);
+    car.rotation.y = angle + Math.PI;
+    scene.add(car);
+    carDepartureState = {
+      startTime: clock.elapsedTime,
+      duration: 1.5,
+      car,
+      startPos,
+      targetPos: new THREE.Vector3(midX, 0, midZ),
+      resolve,
+      arrived: false,
+    };
+    gameState = 'rescueCarDeparture';
+  });
+}
+
+function updateCarDeparture() {
+  if (gameState !== 'rescueCarDeparture' || !carDepartureState || carDepartureState.arrived) return;
+  const s = carDepartureState;
+  const t = Math.min(1, (clock.elapsedTime - s.startTime) / s.duration);
+  s.car.position.lerpVectors(s.startPos, s.targetPos, easeInOutCubic(t));
+  if (t >= 1) {
+    s.arrived = true;
+    if (npc.parent) scene.remove(npc);
+    if (gloria.parent) scene.remove(gloria);
+    startRunAway(s.car, () => {
+      carDepartureState = null;
+      gameState = 'rescueSequence';
+      s.resolve();
+    });
+  }
+}
+
+async function startHealingEvent() {
+  if (isHealingEvent) return;
+  isHealingEvent = true;
+  gameState = 'rescueSequence';
+  setLyingDown(true);
+  await Promise.all([npcReady, gloriaReady, characterReady]);
+  if (!character) { isHealingEvent = false; setLyingDown(false); gameState = 'playing'; return; }
+
+  await showRescueLine('爹地', '痾…我快不行了…', modelPortraitSource, null);
+  await showRescueLine('Julie & Gloria', '讓我來治癒你吧！', npcPortraitSource, gloriaPortraitSource);
+  await runRescueWalkIn();
+  await showRescueLine('Julie & Gloria', '開始治癒！！', npcPortraitSource, gloriaPortraitSource);
+  await runHealingCountdown();
+  await showRescueLine('Julie & Gloria', '下次要注意安全喔！', npcPortraitSource, gloriaPortraitSource);
+  await runCarDeparture();
+
+  setLyingDown(false);
+  isHealingEvent = false;
+  gameState = 'playing';
 }
 
 // --- Throwing money (灑錢): a short cutscene — camera swings around to the
@@ -1876,6 +2022,7 @@ window.addEventListener('wheel', (e) => {
 // the facing rotation or position logic below.
 let character = null;
 let model = null;
+let modelPortraitSource = null;
 let modelBaseY = 0;
 let hasSkeletalAnimation = false;
 let mixer = null;
@@ -1919,6 +2066,12 @@ loader.load(
     character = new THREE.Group();
     character.add(model);
     scene.add(character);
+
+    // A frozen, never-animated clone for portraits (see npcPortraitSource/
+    // gloriaPortraitSource) — taken before the idle animation starts below,
+    // so the player's own face in the "我快不行了" dialog doesn't depend on
+    // where the idle loop happens to be.
+    modelPortraitSource = cloneSkinned(model);
 
     // Animations
     if (gltf.animations && gltf.animations.length > 0) {
@@ -2334,6 +2487,15 @@ document.getElementById('foundConfirm').addEventListener('click', () => {
 
 document.getElementById('questDialogConfirm').addEventListener('click', () => {
   document.getElementById('questIntroDialog').style.display = 'none';
+  if (dialogMode === 'rescue') {
+    // The rescue sequence manages its own gameState/camera throughout —
+    // this dialog is a flat overlay, not a 3D camera cutscene, so there's
+    // no cam-out swing back to gameplay to trigger here.
+    const cb = pendingConfirm;
+    pendingConfirm = null;
+    if (cb) cb();
+    return;
+  }
   if (dialogMode === 'accept') {
     const id = pendingQuestId;
     pendingQuestId = null;
@@ -2357,6 +2519,8 @@ function animate() {
   updateMoneyCinematic();
   updateDialogCinematic();
   updateHealingEvent();
+  updateRescueWalkIn();
+  updateCarDeparture();
   if (mixer) mixer.update(delta);
   npcMixers.forEach((m) => m.update(delta));
   updateTraffic(delta);
