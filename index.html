@@ -173,8 +173,8 @@
 <div id="helpPanel"></div>
 <div id="foundOverlay">
   <div class="card">
-    <h2>🎉 找到了！</h2>
-    <p>你成功找到了 Julie，任務完成！</p>
+    <h2 id="foundTitle">🎉 找到了！</h2>
+    <p id="foundText">你成功找到了 Julie，任務完成！</p>
     <button id="foundConfirm">確認</button>
   </div>
 </div>
@@ -745,11 +745,27 @@ function makePill() {
   return g;
 }
 
-const pickups = []; // { mesh, type: 'coin' | 'pill' }
+function makeReceipt() {
+  const g = new THREE.Group();
+  const paper = new THREE.Mesh(
+    new THREE.BoxGeometry(0.42, 0.03, 0.58),
+    new THREE.MeshStandardMaterial({ color: 0xfafafa })
+  );
+  const clip = new THREE.Mesh(
+    new THREE.BoxGeometry(0.46, 0.02, 0.1),
+    new THREE.MeshStandardMaterial({ color: 0x3fa0e0 })
+  );
+  clip.position.set(0, 0.02, -0.22);
+  g.add(paper, clip);
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
+const pickups = []; // { mesh, type: 'coin' | 'pill' | 'receipt' }
 function spawnPickup(type) {
-  const mesh = type === 'coin' ? makeCoin() : makePill();
+  const mesh = type === 'coin' ? makeCoin() : type === 'pill' ? makePill() : makeReceipt();
   const pos = getRandomReachablePosition(0.6);
-  mesh.position.set(pos.x, type === 'coin' ? 0.5 : 0.6, pos.z);
+  mesh.position.set(pos.x, type === 'coin' ? 0.5 : type === 'pill' ? 0.6 : 0.4, pos.z);
   scene.add(mesh);
   pickups.push({ mesh, type });
 }
@@ -762,9 +778,16 @@ function initPickups() {
   for (let i = 0; i < PILL_COUNT; i++) spawnPickup('pill');
 }
 
+// "我要報帳" quest progress — how many of the 10 scattered receipts have
+// been picked up so far. Receipts don't respawn once collected (unlike
+// coins/pills), since they're a fixed one-time collection target.
+let receiptCount = 0;
+const RECEIPT_TARGET = 10;
+
 function updatePickups(delta) {
   if (!character) return;
-  for (const p of pickups) {
+  for (let i = pickups.length - 1; i >= 0; i--) {
+    const p = pickups[i];
     p.mesh.rotation.y += delta * 2.2;
     const dx = character.position.x - p.mesh.position.x;
     const dz = character.position.z - p.mesh.position.z;
@@ -772,9 +795,16 @@ function updatePickups(delta) {
 
     if (p.type === 'coin') {
       addMoney(10);
-    } else {
+    } else if (p.type === 'pill') {
       if (hp >= 100) continue; // full health — leave the pill for later
       heal(10);
+    } else if (p.type === 'receipt') {
+      receiptCount++;
+      renderQuestPanel();
+      scene.remove(p.mesh);
+      pickups.splice(i, 1);
+      if (receiptCount >= RECEIPT_TARGET) startJulieDeliverPhase();
+      continue;
     }
     const pos = getRandomReachablePosition(0.6);
     p.mesh.position.x = pos.x;
@@ -786,16 +816,9 @@ function updatePickups(delta) {
 // A small generic quest list so more quests can be added later without
 // rewriting this panel. Each quest starts 'available' and only does
 // anything once the player clicks it to accept — nothing quest-related
-// (like the NPC actually appearing) happens before that.
-const quests = {
-  findJulie: {
-    title: '尋找 Julie',
-    hint: '在城市裡找到她',
-    description: 'Julie 藏在城市裡某個你走得到的地方，去把她找出來吧！',
-    state: 'available', // available | active | completed
-    onAccept: () => startFindJulieQuest(),
-  },
-};
+// (like the NPC actually appearing) happens before that. The `quests`
+// object itself, and the "尋找 Julie" chain that grows out of it, is
+// defined further down (see checkQuestProgress and friends).
 
 function renderQuestPanel() {
   const list = document.getElementById('questList');
@@ -804,9 +827,8 @@ function renderQuestPanel() {
     const row = document.createElement('div');
     row.className = `quest-row quest-${q.state}`;
     const icon = q.state === 'completed' ? '✅' : q.state === 'active' ? '🔸' : '⬜';
-    row.innerHTML = `${icon} ${q.title}<span class="quest-hint">${
-      q.state === 'available' ? '點擊接受任務' : q.hint
-    }</span>`;
+    const hint = q.state === 'available' ? '點擊接受任務' : (typeof q.hint === 'function' ? q.hint() : (q.hint || ''));
+    row.innerHTML = `${icon} ${q.title}<span class="quest-hint">${hint}</span>`;
     if (q.state === 'available') {
       row.addEventListener('click', () => beginQuestIntro(id));
     }
@@ -819,7 +841,7 @@ function acceptQuest(id) {
   if (!q || q.state !== 'available') return;
   q.state = 'active';
   renderQuestPanel();
-  q.onAccept();
+  if (q.onAccept) q.onAccept();
 }
 
 function completeQuest(id) {
@@ -827,153 +849,403 @@ function completeQuest(id) {
   renderQuestPanel();
 }
 
-// --- Quest intro cinematic ---
-// Clicking an available quest doesn't accept it immediately: the camera
-// swings to the character's face, a dialog explains what the quest is, and
-// only once the player confirms does it actually start (spawning whatever
-// NPC/objective it involves) and the camera swings back. Movement is
-// frozen throughout the same way the money-throwing cutscene freezes it —
-// none of the intermediate gameState values here are 'playing'.
-const QUEST_CAM_DURATION = 0.6;
-let questCutsceneStart = 0;
+// --- Generic dialog cutscene ---
+// Used for (a) accepting a quest from the panel and (b) mid-quest story
+// beats (Julie/Gloria speaking). In both cases the camera swings to whoever
+// is speaking (`cutsceneTarget` — the player character or an NPC), shows a
+// dialog with an optional portrait, holds until confirmed, then swings back
+// to the normal gameplay camera. Movement is frozen throughout since none
+// of the intermediate gameState values here are 'playing'.
+const CUTSCENE_CAM_DURATION = 0.6;
+let cutsceneStart = 0;
+let cutsceneTarget = null;
+let dialogMode = null; // 'accept' | 'story'
 let pendingQuestId = null;
+let pendingConfirm = null;
+let pendingDialogTitle = '', pendingDialogText = '', pendingPortraitModel = null, pendingPortraitRotY = 0.4;
+
+// Camera position/lookAt for framing an arbitrary actor's face — same
+// convention as the character's own front view (rest pose faces +Z), but
+// rotated by the actor's current facing so it works for NPCs too.
+function getTargetFrontCamPos(actor) {
+  return actor.position.clone().add(new THREE.Vector3(0, 1.6, 3.2).applyAxisAngle(new THREE.Vector3(0, 1, 0), actor.rotation.y));
+}
+function getTargetFrontLookAt(actor) {
+  return actor.position.clone().add(new THREE.Vector3(0, 1.5, 0));
+}
+
+function beginDialogCutscene(target, title, text, portraitModel, mode, onConfirm, portraitRotY = 0.4) {
+  if (gameState !== 'playing' || !character || !target) return;
+  cutsceneTarget = target;
+  dialogMode = mode;
+  pendingConfirm = onConfirm || null;
+  pendingDialogTitle = title;
+  pendingDialogText = text;
+  pendingPortraitModel = portraitModel || null;
+  pendingPortraitRotY = portraitRotY;
+  gameState = 'dialogCamIn';
+  cutsceneStart = clock.elapsedTime;
+}
 
 function beginQuestIntro(id) {
   const q = quests[id];
   if (!q || q.state !== 'available' || gameState !== 'playing' || !character) return;
   pendingQuestId = id;
-  gameState = 'questCamIn';
-  questCutsceneStart = clock.elapsedTime;
+  const portraitModel = id === 'findJulie' ? npc : id === 'findGloria' ? gloria : null;
+  beginDialogCutscene(character, q.title, q.description, portraitModel, 'accept', null);
 }
 
-function updateQuestCinematic() {
-  if (gameState === 'questCamIn') {
-    const t = Math.min(1, (clock.elapsedTime - questCutsceneStart) / QUEST_CAM_DURATION);
+function updateDialogCinematic() {
+  if (gameState === 'dialogCamIn') {
+    const t = Math.min(1, (clock.elapsedTime - cutsceneStart) / CUTSCENE_CAM_DURATION);
     const e = easeInOutCubic(t);
-    camera.position.lerpVectors(getGameplayCamPos(), getFrontViewCamPos(), e);
-    camera.lookAt(new THREE.Vector3().lerpVectors(getGameplayLookAt(), getFrontViewLookAt(), e));
+    camera.position.lerpVectors(getGameplayCamPos(), getTargetFrontCamPos(cutsceneTarget), e);
+    camera.lookAt(new THREE.Vector3().lerpVectors(getGameplayLookAt(), getTargetFrontLookAt(cutsceneTarget), e));
     if (t >= 1) {
-      const q = quests[pendingQuestId];
-      document.getElementById('questDialogTitle').textContent = q.title;
-      document.getElementById('questDialogText').textContent = q.description;
-      document.getElementById('questPortrait').style.display = pendingQuestId === 'findJulie' ? 'block' : 'none';
-      if (pendingQuestId === 'findJulie') renderJuliePortrait();
+      document.getElementById('questDialogTitle').textContent = pendingDialogTitle;
+      document.getElementById('questDialogText').textContent = pendingDialogText;
+      const canvas = document.getElementById('questPortrait');
+      if (pendingPortraitModel) {
+        canvas.style.display = 'block';
+        renderPortraitOf(pendingPortraitModel, pendingPortraitRotY);
+      } else {
+        canvas.style.display = 'none';
+      }
       document.getElementById('questIntroDialog').style.display = 'block';
-      gameState = 'questDialog';
+      gameState = 'dialogHold';
     }
-  } else if (gameState === 'questDialog') {
+  } else if (gameState === 'dialogHold') {
     // Holds here (no auto-timeout) until the confirm button is clicked.
-    camera.position.copy(getFrontViewCamPos());
-    camera.lookAt(getFrontViewLookAt());
-  } else if (gameState === 'questCamOut') {
-    const t = Math.min(1, (clock.elapsedTime - questCutsceneStart) / QUEST_CAM_DURATION);
+    camera.position.copy(getTargetFrontCamPos(cutsceneTarget));
+    camera.lookAt(getTargetFrontLookAt(cutsceneTarget));
+  } else if (gameState === 'dialogCamOut') {
+    const t = Math.min(1, (clock.elapsedTime - cutsceneStart) / CUTSCENE_CAM_DURATION);
     const e = easeInOutCubic(t);
-    camera.position.lerpVectors(getFrontViewCamPos(), getGameplayCamPos(), e);
-    camera.lookAt(new THREE.Vector3().lerpVectors(getFrontViewLookAt(), getGameplayLookAt(), e));
+    camera.position.lerpVectors(getTargetFrontCamPos(cutsceneTarget), getGameplayCamPos(), e);
+    camera.lookAt(new THREE.Vector3().lerpVectors(getTargetFrontLookAt(cutsceneTarget), getGameplayLookAt(), e));
     if (t >= 1) {
       gameState = 'playing';
+      cutsceneTarget = null;
     }
   }
 }
 
-// --- Quest NPC: Julie ---
-// Her model loads in the background as soon as the page does (it's a large
-// file), but she isn't placed in the world or tracked for the quest until
-// the player actually accepts "尋找 Julie" from the quest panel.
-let npc = null;
-let npcActive = false;
-let npcFound = false;
+// --- Quest NPCs: Julie & Gloria ---
+// Both models load in the background as soon as the page does (they're
+// large files), but neither is placed in the world or tracked for a quest
+// until the player actually accepts the relevant quest from the panel.
 const npcMixers = [];
+
+function loadNPC(path, targetHeight = 1.8) {
+  return new Promise((resolve) => {
+    const ldr = new GLTFLoader();
+    ldr.load(
+      path,
+      (gltf) => {
+        const m = gltf.scene;
+        m.traverse((obj) => {
+          if (obj.isMesh) {
+            obj.castShadow = true;
+            obj.receiveShadow = true;
+          }
+        });
+        const box = new THREE.Box3().setFromObject(m);
+        const size = new THREE.Vector3();
+        box.getSize(size);
+        m.scale.setScalar(targetHeight / (size.y || 1));
+        const box2 = new THREE.Box3().setFromObject(m);
+        m.position.y -= box2.min.y;
+
+        const mixers = [];
+        if (gltf.animations && gltf.animations.length > 0) {
+          const mx = new THREE.AnimationMixer(m);
+          mx.clipAction(gltf.animations[0]).play();
+          mixers.push(mx);
+        }
+        resolve({ model: m, mixers });
+      },
+      undefined,
+      (err) => { console.error('Failed to load NPC model', path, err); resolve(null); }
+    );
+  });
+}
+
+let npc = null;
 let resolveNpcReady;
 const npcReady = new Promise((resolve) => { resolveNpcReady = resolve; });
+loadNPC('./model/julie.glb').then((res) => {
+  if (res) { npc = res.model; npcMixers.push(...res.mixers); }
+  resolveNpcReady();
+});
 
-const npcLoader = new GLTFLoader();
-npcLoader.load(
-  './model/julie.glb',
-  (gltf) => {
-    npc = gltf.scene;
-    npc.traverse((obj) => {
-      if (obj.isMesh) {
-        obj.castShadow = true;
-        obj.receiveShadow = true;
-      }
-    });
-
-    const box = new THREE.Box3().setFromObject(npc);
-    const size = new THREE.Vector3();
-    box.getSize(size);
-    const scale = 1.8 / (size.y || 1);
-    npc.scale.setScalar(scale);
-
-    const box2 = new THREE.Box3().setFromObject(npc);
-    npc.position.y -= box2.min.y;
-
-    if (gltf.animations && gltf.animations.length > 0) {
-      const npcMixer = new THREE.AnimationMixer(npc);
-      npcMixer.clipAction(gltf.animations[0]).play();
-      npcMixers.push(npcMixer);
-    }
-
-    setupJuliePortrait();
-    resolveNpcReady();
-  },
-  undefined,
-  (err) => console.error('Failed to load julie.glb', err)
-);
+let gloria = null;
+let resolveGloriaReady;
+const gloriaReady = new Promise((resolve) => { resolveGloriaReady = resolve; });
+loadNPC('./model/gloria.glb').then((res) => {
+  if (res) { gloria = res.model; npcMixers.push(...res.mixers); }
+  resolveGloriaReady();
+});
 
 // A tiny standalone scene + renderer just for the head-and-shoulders
-// portrait shown in the quest dialog — a clone of Julie's model so it's
-// completely independent of her (invisible, not-yet-spawned) position in
-// the main world.
-let portraitRenderer = null, portraitScene = null, portraitCamera = null, portraitModel = null;
-function setupJuliePortrait() {
+// portrait shown in dialogs — a fresh SkeletonUtils clone of whichever
+// actor is speaking, so it's independent of that actor's (possibly
+// off-screen / not-yet-spawned) position in the main world. A plain
+// .clone(true) doesn't rebind a SkinnedMesh's skeleton, which leaves it
+// collapsed/invisible — SkeletonUtils' clone() handles that.
+let portraitRenderer = null, portraitScene = null, portraitCamera = null;
+function setupPortraitRig() {
   const canvas = document.getElementById('questPortrait');
   portraitRenderer = new THREE.WebGLRenderer({ canvas, alpha: true, antialias: true });
   portraitRenderer.setSize(120, 120);
-
   portraitScene = new THREE.Scene();
   portraitScene.add(new THREE.HemisphereLight(0xffffff, 0x444444, 1.6));
   const dirLight = new THREE.DirectionalLight(0xffffff, 1.4);
   dirLight.position.set(1, 2, 3);
   portraitScene.add(dirLight);
-
-  // A plain .clone(true) doesn't rebind a SkinnedMesh's skeleton, which
-  // leaves it collapsed/invisible — SkeletonUtils' clone() handles that.
-  portraitModel = cloneSkinned(npc);
-  portraitModel.position.set(0, 0, 0);
-  portraitModel.rotation.y = 0.4; // slight turn; camera sits on the model's rest-facing (+Z) side
-  portraitScene.add(portraitModel);
-
-  const box = new THREE.Box3().setFromObject(portraitModel);
-  const headY = box.max.y - 0.14; // frame around head height, not full-body
   portraitCamera = new THREE.PerspectiveCamera(28, 1, 0.1, 10);
-  portraitCamera.position.set(0, headY, 0.55);
-  portraitCamera.lookAt(0, headY, 0);
 }
-function renderJuliePortrait() {
-  if (portraitRenderer) portraitRenderer.render(portraitScene, portraitCamera);
+setupPortraitRig();
+
+function renderPortraitOf(sourceModel, rotationY = 0.4) {
+  if (!portraitRenderer || !sourceModel) return;
+  const clone = cloneSkinned(sourceModel);
+  clone.position.set(0, 0, 0);
+  clone.rotation.y = rotationY; // slight turn; camera sits on the model's rest-facing (+Z) side
+  // Fully metallic materials (e.g. some scanned models) render almost black
+  // under this scene's simple hemisphere + directional lights since there's
+  // no environment map to reflect — clone the material and cap metalness
+  // just for the portrait so the face is actually visible.
+  clone.traverse((o) => {
+    if (o.isMesh && o.material) {
+      const mats = Array.isArray(o.material) ? o.material.map((m) => m.clone()) : o.material.clone();
+      o.material = mats;
+      (Array.isArray(mats) ? mats : [mats]).forEach((m) => {
+        if ('metalness' in m) m.metalness = Math.min(m.metalness, 0.15);
+      });
+    }
+  });
+  portraitScene.add(clone);
+
+  // Distance/framing is derived from the model's own footprint rather than
+  // a fixed number — a hardcoded z=0.55 worked for human-proportioned
+  // models but put the camera *inside* a wider/deeper model (rendering
+  // nothing, since you were looking at the inside of its back-culled
+  // faces). Tall-and-narrow models (people) get a tight head-and-shoulders
+  // crop; anything wider/flatter (not humanoid) gets framed so the whole
+  // model fits in view instead of guessing where its "face" is.
+  const box = new THREE.Box3().setFromObject(clone);
+  const size = new THREE.Vector3();
+  box.getSize(size);
+  const center = new THREE.Vector3();
+  box.getCenter(center);
+  const isHumanoid = size.y > size.x * 1.3 && size.y > size.z * 1.3;
+  if (isHumanoid) {
+    const headY = box.max.y - Math.min(0.14, size.y * 0.1);
+    const camDist = Math.max(size.x, size.z) / 2 + 0.35;
+    portraitCamera.position.set(center.x, headY, center.z + camDist);
+    portraitCamera.lookAt(center.x, headY, center.z);
+  } else {
+    const sphere = new THREE.Sphere();
+    box.getBoundingSphere(sphere);
+    const fovRad = THREE.MathUtils.degToRad(portraitCamera.fov);
+    const camDist = (sphere.radius / Math.sin(fovRad / 2)) * 1.2;
+    portraitCamera.position.set(sphere.center.x, sphere.center.y, sphere.center.z + camDist);
+    portraitCamera.lookAt(sphere.center);
+  }
+  portraitRenderer.render(portraitScene, portraitCamera);
+
+  portraitScene.remove(clone);
+  clone.traverse((o) => {
+    if (o.isMesh) {
+      o.geometry.dispose();
+      (Array.isArray(o.material) ? o.material : [o.material]).forEach((m) => m.dispose());
+    }
+  });
+}
+
+// --- NPCs running off after their part of the story is done ---
+const runningAwayNpcs = []; // { mesh, dir, speed, life }
+function startRunAway(npcMesh) {
+  const angle = Math.random() * Math.PI * 2;
+  runningAwayNpcs.push({
+    mesh: npcMesh,
+    dir: new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle)),
+    speed: 14,
+    life: 0,
+  });
+}
+function updateRunningAwayNpcs(delta) {
+  for (let i = runningAwayNpcs.length - 1; i >= 0; i--) {
+    const r = runningAwayNpcs[i];
+    r.mesh.position.addScaledVector(r.dir, r.speed * delta);
+    r.mesh.rotation.y = Math.atan2(r.dir.x, r.dir.z);
+    r.life += delta;
+    if (r.life > 1.2) {
+      scene.remove(r.mesh);
+      runningAwayNpcs.splice(i, 1);
+    }
+  }
 }
 
 const FOUND_DISTANCE = 2.5;
+
+// --- Quest chain state ---
+// julliePhase: null | 'seek' (找到Julie) | 'deliver' (交付收據) | 'awaitReturn' (交付機票)
+// gloriaPhase: null | 'seek'
+let julliePhase = null;
+let gloriaPhase = null;
+let hasTicket = false;
+let foundOverlayOnConfirm = null;
+
+function showFoundOverlay(title, text, onConfirm) {
+  document.getElementById('foundTitle').textContent = title;
+  document.getElementById('foundText').textContent = text;
+  foundOverlayOnConfirm = onConfirm || null;
+  document.getElementById('foundOverlay').style.display = 'flex';
+}
+
+const quests = {
+  findJulie: {
+    title: '尋找 Julie',
+    hint: '在城市裡找到她',
+    description: 'Julie 藏在城市裡某個你走得到的地方，去把她找出來吧！',
+    state: 'available', // available | active | completed
+    onAccept: () => startFindJulieQuest(),
+  },
+};
+
 async function startFindJulieQuest() {
   await Promise.all([cityReady, npcReady, characterReady]);
   const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
   npc.position.x = pos.x;
   npc.position.z = pos.z;
   npc.rotation.y = Math.random() * Math.PI * 2;
-  scene.add(npc);
-  npcActive = true;
+  if (!npc.parent) scene.add(npc);
+  julliePhase = 'seek';
+}
+
+function addReportQuest() {
+  quests.reportReceipts = {
+    title: '我要報帳',
+    hint: () => `收集報帳收據 (${receiptCount}/${RECEIPT_TARGET})`,
+    description: '爹地需要報帳！在城市裡找到 10 張報帳收據，收集齊全後再去找 Julie 交付。',
+    state: 'available',
+    onAccept: () => startReportReceiptsQuest(),
+  };
+  renderQuestPanel();
+}
+
+function startReportReceiptsQuest() {
+  receiptCount = 0;
+  for (let i = 0; i < RECEIPT_TARGET; i++) spawnPickup('receipt');
+  renderQuestPanel();
+}
+
+function startJulieDeliverPhase() {
+  const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
+  npc.position.x = pos.x;
+  npc.position.z = pos.z;
+  npc.rotation.y = Math.random() * Math.PI * 2;
+  if (!npc.parent) scene.add(npc);
+  julliePhase = 'deliver';
+  quests.reportReceipts.hint = '去找 Julie，交付收集到的報帳收據';
+  renderQuestPanel();
+}
+
+function addFindGloriaQuest() {
+  quests.findGloria = {
+    title: '尋找 Gloria',
+    hint: '在城市裡找到她，拿到機票收據',
+    description: 'Julie 說機票收據要找 Gloria 拿，去城市裡找到她吧！',
+    state: 'available',
+    onAccept: () => startFindGloriaQuest(),
+  };
+  renderQuestPanel();
+}
+
+async function startFindGloriaQuest() {
+  await Promise.all([cityReady, gloriaReady, characterReady]);
+  const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
+  gloria.position.x = pos.x;
+  gloria.position.z = pos.z;
+  gloria.rotation.y = Math.random() * Math.PI * 2;
+  if (!gloria.parent) scene.add(gloria);
+  gloriaPhase = 'seek';
+}
+
+function addReturnToJulieQuest() {
+  quests.returnToJulie = {
+    title: '交付機票收據',
+    hint: '回去把機票收據交給 Julie',
+    state: 'active',
+  };
+  julliePhase = 'awaitReturn';
+  renderQuestPanel();
+}
+
+// A big burst of bills raining down from above the character — the reward
+// for finishing the whole "報帳" quest chain. Reuses moneyParticles'
+// physics/cleanup (see updateMoneyParticles), just spawned overhead instead
+// of launched outward from the character.
+function triggerMoneyRain(count = 70) {
+  for (let i = 0; i < count; i++) {
+    const bill = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.35, 0.18),
+      new THREE.MeshStandardMaterial({ color: 0x3fb552, side: THREE.DoubleSide })
+    );
+    const angle = Math.random() * Math.PI * 2;
+    const radius = Math.random() * 7;
+    bill.position.set(
+      character.position.x + Math.cos(angle) * radius,
+      10 + Math.random() * 10,
+      character.position.z + Math.sin(angle) * radius
+    );
+    const velocity = new THREE.Vector3((Math.random() - 0.5) * 1.5, -2 - Math.random() * 1.5, (Math.random() - 0.5) * 1.5);
+    scene.add(bill);
+    moneyParticles.push({ mesh: bill, velocity, life: 0 });
+  }
 }
 
 function checkQuestProgress() {
-  if (!npcActive || npcFound || !npc || !character) return;
-  const dx = character.position.x - npc.position.x;
-  const dz = character.position.z - npc.position.z;
-  if (Math.sqrt(dx * dx + dz * dz) < FOUND_DISTANCE) {
-    npcFound = true;
-    completeQuest('findJulie');
-    gameState = 'questComplete'; // freezes player/traffic-hit input until confirmed
-    document.getElementById('foundOverlay').style.display = 'flex';
+  if (npc && character && julliePhase) {
+    const dx = character.position.x - npc.position.x;
+    const dz = character.position.z - npc.position.z;
+    if (Math.hypot(dx, dz) < FOUND_DISTANCE) {
+      if (julliePhase === 'seek') {
+        julliePhase = null;
+        completeQuest('findJulie');
+        startRunAway(npc);
+        gameState = 'questComplete'; // freezes player/traffic-hit input until confirmed
+        showFoundOverlay('🎉 找到了！', '你成功找到了 Julie，任務完成！', () => addReportQuest());
+      } else if (julliePhase === 'deliver') {
+        julliePhase = null;
+        beginDialogCutscene(npc, 'Julie', '誒…還缺少機票的收據耶，這個要找 Gloria 拿！', npc, 'story', () => {
+          completeQuest('reportReceipts');
+          addFindGloriaQuest();
+        });
+      } else if (julliePhase === 'awaitReturn') {
+        julliePhase = 'done';
+        beginDialogCutscene(npc, 'Julie', '太好了，謝謝你！這是給你的獎勵！', npc, 'story', () => {
+          completeQuest('returnToJulie');
+          addMoney(50000);
+          triggerMoneyRain();
+          startRunAway(npc);
+        });
+      }
+    }
+  }
+  if (gloria && character && gloriaPhase === 'seek') {
+    const dx = character.position.x - gloria.position.x;
+    const dz = character.position.z - gloria.position.z;
+    if (Math.hypot(dx, dz) < FOUND_DISTANCE) {
+      gloriaPhase = null;
+      beginDialogCutscene(gloria, 'Gloria', '這是機票收據，快拿去給 Julie 吧！', gloria, 'story', () => {
+        completeQuest('findGloria');
+        hasTicket = true;
+        startRunAway(gloria);
+        addReturnToJulieQuest();
+      });
+    }
   }
 }
 
@@ -1552,7 +1824,7 @@ function updateCinematicCamera() {
   }
 }
 
-window.__dbg = { movingCars };
+window.__dbg = { movingCars, quests };
 const startBtn = document.getElementById('startBtn');
 startBtn.addEventListener('click', async () => {
   startBtn.disabled = true;
@@ -1570,19 +1842,29 @@ document.getElementById('dialogConfirm').addEventListener('click', () => {
 });
 
 // Just dismisses the "found" card and hands control back — the quest stays
-// marked completed in the panel, nothing about the run resets.
+// marked completed in the panel, nothing about the run resets. May also
+// kick off the next step in a quest chain (see showFoundOverlay callers).
 document.getElementById('foundConfirm').addEventListener('click', () => {
   document.getElementById('foundOverlay').style.display = 'none';
   gameState = 'playing';
+  const cb = foundOverlayOnConfirm;
+  foundOverlayOnConfirm = null;
+  if (cb) cb();
 });
 
 document.getElementById('questDialogConfirm').addEventListener('click', () => {
   document.getElementById('questIntroDialog').style.display = 'none';
-  const id = pendingQuestId;
-  pendingQuestId = null;
-  if (id) acceptQuest(id);
-  questCutsceneStart = clock.elapsedTime;
-  gameState = 'questCamOut';
+  if (dialogMode === 'accept') {
+    const id = pendingQuestId;
+    pendingQuestId = null;
+    if (id) acceptQuest(id);
+  } else if (dialogMode === 'story') {
+    const cb = pendingConfirm;
+    pendingConfirm = null;
+    if (cb) cb();
+  }
+  cutsceneStart = clock.elapsedTime;
+  gameState = 'dialogCamOut';
 });
 
 // --- Animate loop ---
@@ -1593,11 +1875,12 @@ function animate() {
   updateCharacter(delta);
   updateCinematicCamera();
   updateMoneyCinematic();
-  updateQuestCinematic();
+  updateDialogCinematic();
   if (mixer) mixer.update(delta);
   npcMixers.forEach((m) => m.update(delta));
   updateTraffic(delta);
   updateMoneyParticles(delta);
+  updateRunningAwayNpcs(delta);
   if (gameState === 'playing') {
     checkQuestProgress();
     updateTrafficCollisions();
