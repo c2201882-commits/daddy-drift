@@ -2032,11 +2032,32 @@ async function startHealingEvent() {
 
   await showRescueLine('爹地', '痾…我快不行了…', modelPortraitSource, null);
   await showRescueLine('Julie & Gloria', '讓我來治癒你吧！', npcPortraitSource, gloriaPortraitSource);
+
+  // If Julie/Gloria are currently doing quest-chain duty — most notably
+  // Julie standing at her "waiting for the ticket" spot during
+  // julliePhase 'awaitReturn' — pulling them over here and later sending
+  // them off in the car (below) would otherwise strand that quest with no
+  // Julie left anywhere to walk back to. Save whichever of them the quest
+  // chain still needs, and put them right back afterward.
+  const savedNpc = (npc && npc.parent && julliePhase) ? { pos: npc.position.clone(), rotY: npc.rotation.y } : null;
+  const savedGloria = (gloria && gloria.parent && gloriaPhase) ? { pos: gloria.position.clone(), rotY: gloria.rotation.y } : null;
+
   await runRescueWalkIn();
   await showRescueLine('Julie & Gloria', '開始治癒！！', npcPortraitSource, gloriaPortraitSource);
   await runHealingCountdown();
   await showRescueLine('Julie & Gloria', '下次要注意安全喔！', npcPortraitSource, gloriaPortraitSource);
   await runCarDeparture();
+
+  if (savedNpc) {
+    npc.position.copy(savedNpc.pos);
+    npc.rotation.y = savedNpc.rotY;
+    if (!npc.parent) scene.add(npc);
+  }
+  if (savedGloria) {
+    gloria.position.copy(savedGloria.pos);
+    gloria.rotation.y = savedGloria.rotY;
+    if (!gloria.parent) scene.add(gloria);
+  }
 
   setLyingDown(false);
   isHealingEvent = false;
