@@ -1847,8 +1847,8 @@ const PEDESTRIAN_HELL_DURATION = 30;
 // sidestep genuinely dodges it, and once its run ends it just rides off.
 const HELL_CHARGE_SPEED = 16;
 const HELL_CHARGE_DURATION = 3.5; // give up and ride off after this long
-const HELL_ATTACK_COOLDOWN_MIN = 1.5;
-const HELL_ATTACK_COOLDOWN_MAX = 3;
+const HELL_ATTACK_COOLDOWN_MIN = 0.2;
+const HELL_ATTACK_COOLDOWN_MAX = 0.8; // averages ~0.5s between charges
 let pedestrianHellActive = false;
 let pedestrianHellStart = 0;
 let hellAttacker = null; // { m, timer }
