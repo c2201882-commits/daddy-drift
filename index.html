@@ -31,9 +31,17 @@
   #questPanel {
     position: fixed; top: 10px; left: 10px; z-index: 10; display: none;
     background: rgba(0,0,0,0.55); color: #fff; border-radius: 10px; padding: 10px 14px;
-    min-width: 180px; font-size: 13px;
+    min-width: 180px; max-width: 240px; font-size: 13px;
   }
-  #questPanel h3 { margin: 0 0 6px 0; font-size: 13px; letter-spacing: 2px; opacity: 0.8; }
+  #questPanelHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  #questPanel h3 { margin: 0; font-size: 13px; letter-spacing: 2px; opacity: 0.8; }
+  #questToggleBtn {
+    background: none; border: none; color: #fff; opacity: 0.8; font-size: 13px;
+    cursor: pointer; padding: 2px 6px; line-height: 1;
+  }
+  #questList { margin-top: 6px; max-height: 46vh; overflow-y: auto; }
+  #questPanel.quest-collapsed #questList { display: none; }
+  #questPanel.quest-collapsed #questToggleBtn { transform: rotate(-90deg); }
   .quest-row {
     padding: 6px 8px; border-radius: 6px; margin-bottom: 4px; line-height: 1.4;
   }
@@ -188,7 +196,10 @@
   <button id="dialogConfirm">確認</button>
 </div>
 <div id="questPanel">
-  <h3>任務</h3>
+  <div id="questPanelHeader">
+    <h3>任務</h3>
+    <button id="questToggleBtn">▾</button>
+  </div>
   <div id="questList"></div>
 </div>
 <div id="questArrow">
@@ -934,7 +945,7 @@ function spawnMovingCars(perLane = 3) {
         mesh.rotation.y = lane.dir > 0 ? 0 : Math.PI;
       }
       scene.add(mesh);
-      movingCars.push({ mesh, lane, speed: 9 + Math.random() * 5 });
+      movingCars.push({ mesh, lane, speed: 9 + Math.random() * 5, charging: false, chargeDir: null });
     }
   });
 }
@@ -957,12 +968,23 @@ function aabbOverlap(a, b) {
 function updateTraffic(delta) {
   movingCars.forEach((car) => {
     const { mesh, lane, speed } = car;
-    const moveDist = speed * delta;
     let nextX = mesh.position.x, nextZ = mesh.position.z;
-    if (lane.axis === 'x') nextX += lane.dir * moveDist;
-    else nextZ += lane.dir * moveDist;
+    let axisForBox = lane.axis;
 
-    const nextBox = carAABBAt(nextX, nextZ, lane.axis);
+    if (car.charging) {
+      // 行人地獄 (Hard mode): same locked-on, straight-line charge as the
+      // motorcycles — see updateHellAttacker.
+      nextX += car.chargeDir.x * HELL_CHARGE_SPEED * delta;
+      nextZ += car.chargeDir.z * HELL_CHARGE_SPEED * delta;
+      mesh.rotation.y = Math.atan2(car.chargeDir.x, car.chargeDir.z);
+      axisForBox = Math.abs(car.chargeDir.x) > Math.abs(car.chargeDir.z) ? 'x' : 'z';
+    } else {
+      const moveDist = speed * delta;
+      if (lane.axis === 'x') nextX += lane.dir * moveDist;
+      else nextZ += lane.dir * moveDist;
+    }
+
+    const nextBox = carAABBAt(nextX, nextZ, axisForBox);
     // Only checked against static colliders (buildings/parked cars), not
     // other moving cars: checking moving-vs-moving used to let a couple of
     // cars end up permanently nose-to-tail (most often right near the map
@@ -1600,9 +1622,39 @@ const QUEST_TABLE = {
   },
   pedestrianHell: {
     title: '行人地獄',
-    hint: '存活 30 秒，躲避追撞的汽車與摩托車',
-    description: '任務開始後，城裡每一台汽車與摩托車都會想盡辦法衝過來撞你！每撞到一次扣 10 血，撐過 30 秒就過關，血量歸零則任務失敗。',
-    onAccept: () => startPedestrianHellQuest(),
+    hint: '存活 30 秒，躲避追撞的摩托車',
+    description: '任務開始後，會不斷有摩托車鎖定你的位置直線衝撞過來（最多同時 5 台）！每撞到一次扣 10 血，撐過 30 秒就過關並獲得 $500，血量歸零則任務失敗。',
+    onAccept: () => startPedestrianHellQuest(false),
+  },
+  pedestrianHellHard: {
+    title: '行人地獄（困難）',
+    hint: '存活 60 秒，這次連汽車都會衝過來',
+    description: '困難模式：汽車也會加入衝撞行列！撐過 60 秒就過關並獲得 $1000，血量歸零則任務失敗。',
+    onAccept: () => startPedestrianHellQuest(true),
+  },
+  lostPet: {
+    title: '走失的寵物',
+    hint: () => petPhase === 'seekJulie' ? '去找 Julie 了解狀況'
+      : petPhase === 'returnJulie' ? '帶著寵物回去找 Julie'
+      : '在城市裡（或郊外）找到走失的寵物',
+    description: 'Julie 說她的寵物走失了，去找 Julie 問問詳情吧！',
+    portrait: () => npcPortraitSource,
+    onAccept: () => startLostPetQuest(),
+  },
+  mysteryPackage: {
+    title: '神秘包裹',
+    hint: () => packagePhase === 'seekGloria' ? '去找 Gloria 了解狀況'
+      : packagePhase === 'returnGloria' ? '帶著報帳單回去找 Gloria'
+      : '在城市裡找到遺失的報帳單',
+    description: 'Gloria 好像不見了一張重要的報帳單，去找 Gloria 問問詳情吧！',
+    portrait: () => gloriaPortraitSource,
+    onAccept: () => startMysteryPackageQuest(),
+  },
+  photoTour: {
+    title: '拍照打卡',
+    hint: () => `找到城市地標拍照 (${photoFoundCount}/${PHOTO_SPOT_COUNT})`,
+    description: '城市裡藏了幾個特色地標，走到旁邊就會自動拍照，全部找到就有獎勵！',
+    onAccept: () => startPhotoTourQuest(),
   },
 };
 
@@ -1617,6 +1669,10 @@ function unlockQuest(id, overrides = {}) {
 
 unlockQuest('findJulie');
 unlockQuest('pedestrianHell');
+unlockQuest('pedestrianHellHard');
+unlockQuest('lostPet');
+unlockQuest('mysteryPackage');
+unlockQuest('photoTour');
 
 async function startFindJulieQuest() {
   await Promise.all([cityReady, npcReady, characterReady]);
@@ -1655,6 +1711,203 @@ async function startFindGloriaQuest() {
   gloriaPhase = 'seek';
 }
 
+// --- 走失的寵物 (uses the shared Julie/npc — assumes it isn't mid-errand
+// for the 我要報帳 chain at the same moment) ---
+// null | 'seekJulie' (find her to hear about it) | 'seekPet' (find/catch the
+// pet) | 'returnJulie' (bring it back)
+let petPhase = null;
+let petTarget = null; // { mesh, wanderDir, wanderTimer }
+let petCaught = false;
+
+function makePet() {
+  const g = new THREE.Group();
+  const furMat = new THREE.MeshStandardMaterial({ color: 0xc98a4b });
+  const body = new THREE.Mesh(new THREE.CapsuleGeometry(0.22, 0.5, 4, 8), furMat);
+  body.rotation.z = Math.PI / 2;
+  body.position.y = 0.32;
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.18, 10, 10), furMat);
+  head.position.set(0, 0.36, 0.42);
+  const earMat = new THREE.MeshStandardMaterial({ color: 0x8a5a2b });
+  [-0.1, 0.1].forEach((x) => {
+    const ear = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.14, 8), earMat);
+    ear.position.set(x, 0.5, 0.42);
+    g.add(ear);
+  });
+  g.add(body, head);
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
+async function startLostPetQuest() {
+  await Promise.all([cityReady, npcReady, characterReady]);
+  const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
+  npc.position.x = pos.x;
+  npc.position.z = pos.z;
+  npc.rotation.y = Math.random() * Math.PI * 2;
+  if (!npc.parent) scene.add(npc);
+  petCaught = false;
+  petPhase = 'seekJulie';
+}
+
+function spawnLostPet() {
+  const mesh = makePet();
+  // "寵物有可能出現在野外" — half the time she spawns out in the grass
+  // beyond the city instead of somewhere reachable inside it.
+  let pos;
+  if (Math.random() < 0.5) {
+    pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 15 });
+  } else {
+    const zone = BEAST_ZONES[Math.floor(Math.random() * BEAST_ZONES.length)];
+    pos = { x: zone.minX + Math.random() * (zone.maxX - zone.minX), z: zone.minZ + Math.random() * (zone.maxZ - zone.minZ) };
+  }
+  mesh.position.set(pos.x, 0, pos.z);
+  scene.add(mesh);
+  const angle = Math.random() * Math.PI * 2;
+  petTarget = { mesh, wanderDir: new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle)), wanderTimer: 2 + Math.random() * 3 };
+  petPhase = 'seekPet';
+  renderQuestPanel();
+}
+
+const PET_CATCH_RADIUS = 1.8;
+function updatePet(delta) {
+  if (!petTarget || !character) return;
+  const p = petTarget;
+  if (petCaught) {
+    // Trots along behind the player once caught.
+    const behind = character.position.clone().addScaledVector(
+      new THREE.Vector3(Math.sin(character.rotation.y), 0, Math.cos(character.rotation.y)), -1.4
+    );
+    p.mesh.position.lerp(behind, Math.min(1, delta * 4));
+    p.mesh.rotation.y = character.rotation.y;
+    return;
+  }
+  p.wanderTimer -= delta;
+  if (p.wanderTimer <= 0) {
+    const angle = Math.random() * Math.PI * 2;
+    p.wanderDir.set(Math.sin(angle), 0, Math.cos(angle));
+    p.wanderTimer = 2 + Math.random() * 3;
+  }
+  p.mesh.position.addScaledVector(p.wanderDir, 1.3 * delta);
+  p.mesh.rotation.y = Math.atan2(p.wanderDir.x, p.wanderDir.z);
+
+  if (petPhase === 'seekPet') {
+    const dx = character.position.x - p.mesh.position.x;
+    const dz = character.position.z - p.mesh.position.z;
+    if (Math.hypot(dx, dz) < PET_CATCH_RADIUS) {
+      petCaught = true;
+      petPhase = 'returnJulie';
+      renderQuestPanel();
+    }
+  }
+}
+
+// --- 神秘包裹 (uses the shared Gloria — same one-npc-at-a-time caveat) ---
+// null | 'seekGloria' | 'seekItem' | 'returnGloria'
+let packagePhase = null;
+let lostReceiptMesh = null;
+let hasLostReceiptItem = false;
+
+async function startMysteryPackageQuest() {
+  await Promise.all([cityReady, gloriaReady, characterReady]);
+  const pos = getRandomReachablePosition(1.0, { x: character.position.x, z: character.position.z, radius: 20 });
+  gloria.position.x = pos.x;
+  gloria.position.z = pos.z;
+  gloria.rotation.y = Math.random() * Math.PI * 2;
+  if (!gloria.parent) scene.add(gloria);
+  hasLostReceiptItem = false;
+  packagePhase = 'seekGloria';
+}
+
+function spawnLostReceipt() {
+  const mesh = makeReceipt();
+  const pos = getRandomReachablePosition(0.6);
+  mesh.position.set(pos.x, 0.4, pos.z);
+  scene.add(mesh);
+  lostReceiptMesh = mesh;
+  packagePhase = 'seekItem';
+  renderQuestPanel();
+}
+
+function updateLostReceipt(delta) {
+  if (!lostReceiptMesh || !character) return;
+  lostReceiptMesh.rotation.y += delta * 2.2;
+  if (packagePhase !== 'seekItem') return;
+  const dx = character.position.x - lostReceiptMesh.position.x;
+  const dz = character.position.z - lostReceiptMesh.position.z;
+  if (Math.hypot(dx, dz) < PICKUP_RADIUS) {
+    scene.remove(lostReceiptMesh);
+    lostReceiptMesh = null;
+    hasLostReceiptItem = true;
+    packagePhase = 'returnGloria';
+    renderQuestPanel();
+  }
+}
+
+// --- 拍照打卡 ---
+const PHOTO_SPOT_COUNT = 6;
+const PHOTO_SPOT_RADIUS = 1.6;
+let photoSpots = []; // [{ mesh }]
+let photoFoundCount = 0;
+
+function makePhotoSpot() {
+  const g = new THREE.Group();
+  const pole = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.06, 0.06, 1.4, 8),
+    new THREE.MeshStandardMaterial({ color: 0x333333 })
+  );
+  pole.position.y = 0.7;
+  const cam = new THREE.Mesh(
+    new THREE.BoxGeometry(0.4, 0.28, 0.24),
+    new THREE.MeshStandardMaterial({ color: 0xff2d95, emissive: 0x330018, emissiveIntensity: 0.5 })
+  );
+  cam.position.y = 1.5;
+  const lens = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.1, 0.1, 0.14, 12),
+    new THREE.MeshStandardMaterial({ color: 0x111111 })
+  );
+  lens.rotation.z = Math.PI / 2;
+  lens.position.set(0, 1.5, 0.18);
+  g.add(pole, cam, lens);
+  g.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  return g;
+}
+
+function startPhotoTourQuest() {
+  photoFoundCount = 0;
+  photoSpots.forEach((s) => scene.remove(s.mesh));
+  photoSpots = [];
+  for (let i = 0; i < PHOTO_SPOT_COUNT; i++) {
+    const mesh = makePhotoSpot();
+    const pos = getRandomReachablePosition(1.0);
+    mesh.position.set(pos.x, 0, pos.z);
+    scene.add(mesh);
+    photoSpots.push({ mesh });
+  }
+  renderQuestPanel();
+}
+
+function updatePhotoSpots(delta) {
+  if (!character || photoSpots.length === 0) return;
+  for (let i = photoSpots.length - 1; i >= 0; i--) {
+    const s = photoSpots[i];
+    s.mesh.rotation.y += delta;
+    const dx = character.position.x - s.mesh.position.x;
+    const dz = character.position.z - s.mesh.position.z;
+    if (Math.hypot(dx, dz) < PHOTO_SPOT_RADIUS) {
+      scene.remove(s.mesh);
+      photoSpots.splice(i, 1);
+      photoFoundCount++;
+      renderQuestPanel();
+      if (photoFoundCount >= PHOTO_SPOT_COUNT) {
+        completeQuest('photoTour');
+        addMoney(400);
+        gameState = 'questComplete';
+        showFoundOverlay('📸 打卡完成！', '找齊了所有地標，獲得 $400！', () => {});
+      }
+    }
+  }
+}
+
 // A big burst of bills raining down from above the character — the reward
 // for finishing the whole "報帳" quest chain. Reuses moneyParticles'
 // physics/cleanup (see updateMoneyParticles), just spawned overhead instead
@@ -1683,8 +1936,10 @@ function triggerMoneyRain(count = 70) {
 // step wants next — Julie, Gloria, or (while collecting) the nearest
 // remaining receipt — so the player doesn't have to wander the city blind.
 function getCurrentQuestTargetPos() {
-  if (npc && julliePhase) return npc.position;
-  if (gloria && gloriaPhase === 'seek') return gloria.position;
+  if (npc && (julliePhase || petPhase)) return npc.position;
+  if (gloria && (gloriaPhase === 'seek' || packagePhase === 'seekGloria' || packagePhase === 'returnGloria')) return gloria.position;
+  if (petTarget && petPhase === 'seekPet') return petTarget.mesh.position;
+  if (lostReceiptMesh && packagePhase === 'seekItem') return lostReceiptMesh.position;
   if (character && quests.reportReceipts && quests.reportReceipts.state === 'active') {
     let nearest = null;
     let nearestDist = Infinity;
@@ -1692,6 +1947,15 @@ function getCurrentQuestTargetPos() {
       if (p.type !== 'receipt') continue;
       const d = Math.hypot(character.position.x - p.mesh.position.x, character.position.z - p.mesh.position.z);
       if (d < nearestDist) { nearestDist = d; nearest = p.mesh.position; }
+    }
+    return nearest;
+  }
+  if (character && photoSpots.length > 0 && quests.photoTour && quests.photoTour.state === 'active') {
+    let nearest = null;
+    let nearestDist = Infinity;
+    for (const s of photoSpots) {
+      const d = Math.hypot(character.position.x - s.mesh.position.x, character.position.z - s.mesh.position.z);
+      if (d < nearestDist) { nearestDist = d; nearest = s.mesh.position; }
     }
     return nearest;
   }
@@ -1780,6 +2044,45 @@ function checkQuestProgress() {
       });
     }
   }
+
+  // --- 走失的寵物 ---
+  if (npc && character && petPhase) {
+    const dx = character.position.x - npc.position.x;
+    const dz = character.position.z - npc.position.z;
+    if (petPhase === 'seekJulie' && Math.hypot(dx, dz) < FOUND_DISTANCE) {
+      petPhase = null;
+      beginDialogCutscene(npc, 'Julie', '我的寵物不見了，好像跑到城裡或郊外去了，可以幫我找回來嗎？', npcPortraitSource, 'story', () => {
+        spawnLostPet();
+      });
+    } else if (petPhase === 'returnJulie' && petCaught && Math.hypot(dx, dz) < FOUND_DISTANCE) {
+      petPhase = null;
+      beginDialogCutscene(npc, 'Julie', '謝謝你找到牠了！這是給你的謝禮！', npcPortraitSource, 'story', () => {
+        completeQuest('lostPet');
+        addMoney(300);
+        petCaught = false;
+        if (petTarget) { scene.remove(petTarget.mesh); petTarget = null; }
+      });
+    }
+  }
+
+  // --- 神秘包裹 ---
+  if (gloria && character && packagePhase) {
+    const dx = character.position.x - gloria.position.x;
+    const dz = character.position.z - gloria.position.z;
+    if (packagePhase === 'seekGloria' && Math.hypot(dx, dz) < FOUND_DISTANCE) {
+      packagePhase = null;
+      beginDialogCutscene(gloria, 'Gloria', '我不見了一張重要的報帳單，好像掉在城裡某處，可以幫我找回來嗎？', gloriaPortraitSource, 'story', () => {
+        spawnLostReceipt();
+      });
+    } else if (packagePhase === 'returnGloria' && hasLostReceiptItem && Math.hypot(dx, dz) < FOUND_DISTANCE) {
+      packagePhase = null;
+      beginDialogCutscene(gloria, 'Gloria', '太好了，謝謝你找到了！這是謝禮！', gloriaPortraitSource, 'story', () => {
+        completeQuest('mysteryPackage');
+        addMoney(300);
+        hasLostReceiptItem = false;
+      });
+    }
+  }
 }
 
 // --- HP / money HUD ---
@@ -1841,33 +2144,41 @@ function addMoney(amount) {
 // while this is active fails the quest outright instead of triggering the
 // normal Julie/Gloria rescue (see takeDamage).
 const PEDESTRIAN_HELL_DURATION = 30;
-// Only one motorcycle ever charges at a time — see updateHellAttacker.
-// It aims once (at the player's position when the charge starts) and
+const PEDESTRIAN_HELL_HARD_DURATION = 60;
+const PEDESTRIAN_HELL_REWARD = 500;
+const PEDESTRIAN_HELL_HARD_REWARD = 1000;
+// Only a handful of vehicles ever charge at once — see updateHellAttacker.
+// Each aims once (at the player's position when its charge starts) and
 // drives dead straight at HELL_CHARGE_SPEED; it does not re-aim, so a
 // sidestep genuinely dodges it, and once its run ends it just rides off.
 const HELL_CHARGE_SPEED = 16;
 const HELL_CHARGE_DURATION = 3.5; // give up and ride off after this long
 const HELL_ATTACK_COOLDOWN_MIN = 0.2;
 const HELL_ATTACK_COOLDOWN_MAX = 0.8; // averages ~0.5s between charges
-let pedestrianHellActive = false;
-let pedestrianHellStart = 0;
 const MAX_HELL_ATTACKERS = 5; // how many can be charging at once
+let pedestrianHellActive = false;
+let pedestrianHellHard = false; // Hard mode: cars charge too, not just motorcycles
+let pedestrianHellDuration = PEDESTRIAN_HELL_DURATION;
+let pedestrianHellStart = 0;
 let hellAttackers = []; // [{ m, endTime }]
 let hellNextAttackTime = 0;
 
-function startPedestrianHellQuest() {
+function startPedestrianHellQuest(hard = false) {
   hp = 100;
   updateHUD();
   pedestrianHellActive = true;
+  pedestrianHellHard = hard;
+  pedestrianHellDuration = hard ? PEDESTRIAN_HELL_HARD_DURATION : PEDESTRIAN_HELL_DURATION;
   pedestrianHellStart = clock.elapsedTime;
   hellAttackers = [];
   hellNextAttackTime = clock.elapsedTime + 1;
   document.getElementById('hellBanner').style.display = 'flex';
+  document.querySelector('#hellBanner div').textContent = hard ? '🚗💥 行人地獄（困難）' : '🚗💥 行人地獄';
 }
 
 function updatePedestrianHell() {
   if (!pedestrianHellActive) return;
-  const remaining = PEDESTRIAN_HELL_DURATION - (clock.elapsedTime - pedestrianHellStart);
+  const remaining = pedestrianHellDuration - (clock.elapsedTime - pedestrianHellStart);
   if (remaining <= 0) {
     endPedestrianHell(true);
     return;
@@ -1895,7 +2206,9 @@ function updateHellAttacker() {
   if (hellAttackers.length >= MAX_HELL_ATTACKERS) return;
   if (clock.elapsedTime < hellNextAttackTime) return;
 
-  const pool = motorcycles.filter((m) => !m.charging);
+  // Hard mode draws from cars as well as motorcycles.
+  const vehiclePool = pedestrianHellHard ? [...motorcycles, ...movingCars] : motorcycles;
+  const pool = vehiclePool.filter((m) => !m.charging);
   const candidate = pool[Math.floor(Math.random() * pool.length)];
   if (!candidate) return;
   const dx = character.position.x - candidate.mesh.position.x;
@@ -1915,12 +2228,15 @@ function endPedestrianHell(won) {
   hp = 100;
   updateHUD();
   gameState = 'questComplete'; // freezes input until the result dialog is confirmed
+  const questId = pedestrianHellHard ? 'pedestrianHellHard' : 'pedestrianHell';
+  const reward = pedestrianHellHard ? PEDESTRIAN_HELL_HARD_REWARD : PEDESTRIAN_HELL_REWARD;
   if (won) {
-    completeQuest('pedestrianHell');
-    showFoundOverlay('🎉 挑戰成功！', '你撐過了 30 秒的行人地獄！', () => {});
+    completeQuest(questId);
+    addMoney(reward);
+    showFoundOverlay('🎉 挑戰成功！', `你撐過了 ${pedestrianHellDuration} 秒的行人地獄！獲得 $${reward}！`, () => {});
   } else {
     showFoundOverlay('💀 任務失敗', '血量歸零了……要再挑戰一次嗎？可以到任務欄重新接受任務。', () => {
-      unlockQuest('pedestrianHell');
+      unlockQuest(questId);
     });
   }
 }
@@ -2521,6 +2837,12 @@ document.getElementById('helpBtn').addEventListener('click', () => {
   panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
 });
 
+// The quest list only grows over time — let the player collapse it down to
+// just the header once it gets long.
+document.getElementById('questToggleBtn').addEventListener('click', () => {
+  document.getElementById('questPanel').classList.toggle('quest-collapsed');
+});
+
 let walkCycle = 0;
 
 // Procedural fake-walk for models with no skeleton/animation: bobs, sways
@@ -2834,6 +3156,9 @@ function animate() {
     updatePickups(delta);
     updateQuestArrow();
     updatePedestrianHell();
+    updatePet(delta);
+    updateLostReceipt(delta);
+    updatePhotoSpots(delta);
   } else {
     document.getElementById('questArrow').style.display = 'none';
   }
