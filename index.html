@@ -144,6 +144,12 @@
     padding: 16px 32px; border-radius: 12px; border: 2px solid #ffd54a;
     font-size: 20px; text-align: center;
   }
+  #healingBanner {
+    position: fixed; left: 50%; bottom: 80px; transform: translateX(-50%);
+    z-index: 25; display: none; background: rgba(20, 20, 30, 0.92); color: #7CFC9A;
+    padding: 16px 32px; border-radius: 12px; border: 2px solid #7CFC9A;
+    font-size: 20px; font-weight: bold; text-align: center;
+  }
   #questIntroDialog {
     position: fixed; left: 50%; bottom: 60px; transform: translateX(-50%);
     z-index: 25; display: none; background: rgba(20, 20, 30, 0.92); color: #fff;
@@ -200,6 +206,7 @@
   </div>
 </div>
 <div id="moneyDialog">爹地好開心</div>
+<div id="healingBanner">💚 治癒中...</div>
 <div id="questIntroDialog">
   <canvas id="questPortrait" width="120" height="120"></canvas>
   <h3 id="questDialogTitle"></h3>
@@ -461,9 +468,13 @@ function placeMountain(x, z) {
   scene.add(mountain);
 }
 
+const BOUNDARY_RADIUS = CITY_SIZE + 15; // ring of trees, just past the paved city
+const MOUNTAIN_RADIUS = CITY_SIZE + 35; // sparser, taller mountains further back
+// The walkable strip of open grass between the paved city and the tree
+// ring — where the wild beasts (see below) roam.
+const GRASS_MARGIN = 3;
+
 function placeBoundaryRing() {
-  const BOUNDARY_RADIUS = CITY_SIZE + 15; // ring of trees, just past the paved city
-  const MOUNTAIN_RADIUS = CITY_SIZE + 35; // sparser, taller mountains further back
   const FAR = 400; // covers the rest of the 480x480 ground plane
 
   // Block movement past the ring entirely — four strips covering the grass
@@ -605,6 +616,7 @@ async function buildCity() {
 
   [1, -1].forEach((sx) => [1, -1].forEach((sz) => sealQuadrantInterior(sx, sz)));
   placeBoundaryRing();
+  spawnBeasts();
 
   placeParkedCars();
   initPickups();
@@ -767,6 +779,107 @@ function updatePedestrians(delta) {
 
     p.walkCycle += delta * 7;
     p.mesh.position.y = Math.abs(Math.sin(p.walkCycle)) * 0.05;
+  });
+}
+
+// --- Wild beasts in the grass beyond the city ---
+// Roam the open grass strip between the paved city (CITY_SIZE) and the
+// tree ring (BOUNDARY_RADIUS). Each is confined to one of the four strips
+// around the city (its "zone") so it never wanders into the road network.
+// They idly wander until the player gets close, then chase and, on
+// contact, deal damage on a cooldown — same invulnerability-window pattern
+// as the moving-car hits.
+const BEAST_ZONES = [
+  { minX: -BOUNDARY_RADIUS + 5, maxX: BOUNDARY_RADIUS - 5, minZ: CITY_SIZE + GRASS_MARGIN, maxZ: BOUNDARY_RADIUS - GRASS_MARGIN },
+  { minX: -BOUNDARY_RADIUS + 5, maxX: BOUNDARY_RADIUS - 5, minZ: -(BOUNDARY_RADIUS - GRASS_MARGIN), maxZ: -(CITY_SIZE + GRASS_MARGIN) },
+  { minX: CITY_SIZE + GRASS_MARGIN, maxX: BOUNDARY_RADIUS - GRASS_MARGIN, minZ: -BOUNDARY_RADIUS + 5, maxZ: BOUNDARY_RADIUS - 5 },
+  { minX: -(BOUNDARY_RADIUS - GRASS_MARGIN), maxX: -(CITY_SIZE + GRASS_MARGIN), minZ: -BOUNDARY_RADIUS + 5, maxZ: BOUNDARY_RADIUS - 5 },
+];
+
+function makeBeast() {
+  const g = new THREE.Group();
+  const furMat = new THREE.MeshStandardMaterial({ color: 0x5b4636 });
+  const legMat = new THREE.MeshStandardMaterial({ color: 0x3d2f22 });
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.9, 2.6), furMat);
+  body.position.y = 0.75;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.7, 0.9), furMat);
+  head.position.set(0, 1.0, 1.5);
+  g.add(body, head);
+  [[-0.55, 0.9], [0.55, 0.9], [-0.55, -0.9], [0.55, -0.9]].forEach(([x, z]) => {
+    const leg = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.7, 0.28), legMat);
+    leg.position.set(x, 0.35, z);
+    g.add(leg);
+  });
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
+const BEASTS_PER_ZONE = 3;
+const BEAST_WANDER_SPEED = 1.4;
+const BEAST_CHASE_SPEED = 4.5;
+const BEAST_CHASE_RADIUS = 16;
+const BEAST_HIT_RADIUS = 1.6;
+const BEAST_DAMAGE = 10;
+const BEAST_HIT_INVULN = 1.0;
+const beasts = []; // { mesh, zone, dir, speed, wanderTimer }
+let lastBeastHitTime = -999;
+
+function spawnBeasts() {
+  BEAST_ZONES.forEach((zone) => {
+    for (let i = 0; i < BEASTS_PER_ZONE; i++) {
+      const mesh = makeBeast();
+      const x = zone.minX + Math.random() * (zone.maxX - zone.minX);
+      const z = zone.minZ + Math.random() * (zone.maxZ - zone.minZ);
+      mesh.position.set(x, 0, z);
+      const angle = Math.random() * Math.PI * 2;
+      scene.add(mesh);
+      beasts.push({
+        mesh, zone,
+        dir: new THREE.Vector3(Math.sin(angle), 0, Math.cos(angle)),
+        speed: BEAST_WANDER_SPEED,
+        wanderTimer: 2 + Math.random() * 3,
+      });
+    }
+  });
+}
+
+function updateBeasts(delta) {
+  if (!character) return;
+  beasts.forEach((b) => {
+    const dx = character.position.x - b.mesh.position.x;
+    const dz = character.position.z - b.mesh.position.z;
+    const distToPlayer = Math.hypot(dx, dz);
+
+    if (distToPlayer < BEAST_CHASE_RADIUS) {
+      if (distToPlayer > 0.01) b.dir.set(dx / distToPlayer, 0, dz / distToPlayer);
+      b.speed = BEAST_CHASE_SPEED;
+    } else {
+      b.wanderTimer -= delta;
+      if (b.wanderTimer <= 0) {
+        const angle = Math.random() * Math.PI * 2;
+        b.dir.set(Math.sin(angle), 0, Math.cos(angle));
+        b.wanderTimer = 2 + Math.random() * 3;
+      }
+      b.speed = BEAST_WANDER_SPEED;
+    }
+
+    let nx = b.mesh.position.x + b.dir.x * b.speed * delta;
+    let nz = b.mesh.position.z + b.dir.z * b.speed * delta;
+    // Bounce off its home strip's edges instead of wandering into the
+    // paved city or out past the tree ring.
+    if (nx < b.zone.minX || nx > b.zone.maxX) { b.dir.x *= -1; nx = b.mesh.position.x; }
+    if (nz < b.zone.minZ || nz > b.zone.maxZ) { b.dir.z *= -1; nz = b.mesh.position.z; }
+    b.mesh.position.x = nx;
+    b.mesh.position.z = nz;
+    b.mesh.rotation.y = Math.atan2(b.dir.x, b.dir.z);
+
+    if (gameState === 'playing' && distToPlayer < BEAST_HIT_RADIUS) {
+      const now = clock.elapsedTime;
+      if (now - lastBeastHitTime >= BEAST_HIT_INVULN) {
+        lastBeastHitTime = now;
+        takeDamage(BEAST_DAMAGE);
+      }
+    }
   });
 }
 
@@ -1557,8 +1670,10 @@ function updateHUD() {
   document.getElementById('moneyText').textContent = `$${money}`;
 }
 function takeDamage(amount) {
+  if (isHealingEvent) return; // safe while Julie & Gloria are tending to the player
   hp = Math.max(0, hp - amount);
   updateHUD();
+  if (hp <= 0 && gameState === 'playing') startHealingEvent();
 }
 function heal(amount) {
   if (hp >= 100) return false;
@@ -1569,6 +1684,65 @@ function heal(amount) {
 function addMoney(amount) {
   money += amount;
   updateHUD();
+}
+
+// --- Running out of HP: Julie & Gloria rush over and heal the player ---
+// Freezes play (gameState 'healing' — everything gated on 'playing' stops,
+// same mechanism as every other cutscene) for HEALING_DURATION seconds,
+// full-heals, then the two of them leave together by car. Reuses whichever
+// npc/gloria instances already exist in the world regardless of where the
+// 我要報帳 quest chain currently has them — they're repositioned right next
+// to the player either way.
+const HEALING_DURATION = 10;
+let isHealingEvent = false;
+let healingStart = 0;
+
+async function startHealingEvent() {
+  isHealingEvent = true;
+  gameState = 'healing';
+  await Promise.all([npcReady, gloriaReady, characterReady]);
+  if (!character) return;
+  const baseAngle = character.rotation.y;
+  const dist = 1.6;
+  npc.position.set(
+    character.position.x + Math.sin(baseAngle + 0.6) * dist, 0,
+    character.position.z + Math.cos(baseAngle + 0.6) * dist
+  );
+  npc.rotation.y = baseAngle + Math.PI;
+  gloria.position.set(
+    character.position.x + Math.sin(baseAngle - 0.6) * dist, 0,
+    character.position.z + Math.cos(baseAngle - 0.6) * dist
+  );
+  gloria.rotation.y = baseAngle + Math.PI;
+  if (!npc.parent) scene.add(npc);
+  if (!gloria.parent) scene.add(gloria);
+
+  document.getElementById('healingBanner').style.display = 'block';
+  healingStart = clock.elapsedTime;
+}
+
+function updateHealingEvent() {
+  if (gameState !== 'healing') return;
+  if (clock.elapsedTime - healingStart >= HEALING_DURATION) {
+    hp = 100;
+    updateHUD();
+    document.getElementById('healingBanner').style.display = 'none';
+    isHealingEvent = false;
+    driveNpcsAway([npc, gloria]);
+    gameState = 'playing';
+  }
+}
+
+// They "get in a car" (removed from the scene) and drive off together,
+// reusing the same run-off-and-vanish animation as every other NPC exit.
+function driveNpcsAway(actors) {
+  const origin = actors.find(Boolean);
+  actors.forEach((a) => { if (a && a.parent) scene.remove(a); });
+  const car = makeCar(0xdedede);
+  if (origin) car.position.copy(origin.position);
+  car.position.y = 0;
+  scene.add(car);
+  startRunAway(car);
 }
 
 // --- Throwing money (灑錢): a short cutscene — camera swings around to the
@@ -1940,6 +2114,31 @@ function tryMove(dx, dz) {
   if (!collides(p.x, p.z + dz)) p.z += dz;
 }
 
+// Knockback ignores colliders mid-flight (see updateCharacter), so a car
+// hit can land the player inside a parked car's box — where tryMove's
+// per-axis check alone can't dig them back out, since almost any small
+// step still overlaps the same box. Called once on landing: nudges the
+// position out along whichever axis needs the smaller push, repeating in
+// case it landed in the overlap of two colliders.
+function resolveCollisionPush(pos) {
+  for (let iter = 0; iter < 8; iter++) {
+    const hit = colliders.find((c) =>
+      pos.x + PLAYER_RADIUS > c.minX && pos.x - PLAYER_RADIUS < c.maxX &&
+      pos.z + PLAYER_RADIUS > c.minZ && pos.z - PLAYER_RADIUS < c.maxZ
+    );
+    if (!hit) return;
+    const centerX = (hit.minX + hit.maxX) / 2;
+    const centerZ = (hit.minZ + hit.maxZ) / 2;
+    const overlapX = (hit.maxX - hit.minX) / 2 + PLAYER_RADIUS - Math.abs(pos.x - centerX);
+    const overlapZ = (hit.maxZ - hit.minZ) / 2 + PLAYER_RADIUS - Math.abs(pos.z - centerZ);
+    if (overlapX < overlapZ) {
+      pos.x += Math.sign(pos.x - centerX || 1) * (overlapX + 0.05);
+    } else {
+      pos.z += Math.sign(pos.z - centerZ || 1) * (overlapZ + 0.05);
+    }
+  }
+}
+
 // The sidewalk sits `sidewalkThickness` above the road like a real curb.
 // Returns how high the ground is under (x, z) so the character can step up
 // onto it instead of being visually buried up to the ankles. Matches the
@@ -1967,10 +2166,16 @@ function updateCharacter(delta) {
     character.position.y = knockbackStartPos.y + Math.sin(Math.min(1, t) * Math.PI) * KNOCKBACK_HEIGHT;
     if (model) model.rotateOnAxis(knockbackSpinAxis, knockbackSpinSpeed * delta);
 
-    if (knockbackTimer === 0 && model) {
-      // Landed — clear the tumble so it doesn't stay mid-spin into the idle pose.
-      model.rotation.set(0, 0, 0);
-      model.position.y = modelBaseY;
+    if (knockbackTimer === 0) {
+      // Landed — clear the tumble so it doesn't stay mid-spin into the idle
+      // pose, and make sure the landing spot isn't inside a parked car
+      // (the knockback arc itself ignores colliders, so it can fling the
+      // player straight into one).
+      if (model) {
+        model.rotation.set(0, 0, 0);
+        model.position.y = modelBaseY;
+      }
+      resolveCollisionPush(character.position);
     }
   } else {
     const walkSpeed = 2.5;
@@ -2151,10 +2356,12 @@ function animate() {
   updateCinematicCamera();
   updateMoneyCinematic();
   updateDialogCinematic();
+  updateHealingEvent();
   if (mixer) mixer.update(delta);
   npcMixers.forEach((m) => m.update(delta));
   updateTraffic(delta);
   updatePedestrians(delta);
+  updateBeasts(delta);
   updateMoneyParticles(delta);
   updateRunningAwayNpcs(delta);
   if (gameState === 'playing') {
