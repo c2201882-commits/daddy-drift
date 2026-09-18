@@ -424,15 +424,73 @@ function makeBench() {
   return group;
 }
 
-async function placeTree(file, x, z) {
+async function placeTree(file, x, z, scale = TREE_SCALE) {
   const template = await loadBuildingModel(file, 'nature');
   if (!template) return;
   const instance = template.clone(true);
   instance.traverse((obj) => { if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; } });
-  instance.scale.setScalar(TREE_SCALE);
+  instance.scale.setScalar(scale);
   instance.position.set(x, 0, z);
   instance.rotation.y = Math.random() * Math.PI * 2;
   scene.add(instance);
+}
+
+// --- Map boundary: a ring of trees (near) and low-poly mountains (far)
+// around the whole paved city, so walking to the edge finds a natural-
+// looking wall instead of open grass fading into nothing. Backed by
+// invisible colliders so the player can't walk past the ring at all.
+function makeMountain(height, radius, color) {
+  const mesh = new THREE.Mesh(
+    new THREE.ConeGeometry(radius, height, 7),
+    new THREE.MeshStandardMaterial({ color, flatShading: true })
+  );
+  mesh.position.y = height / 2;
+  mesh.rotation.y = Math.random() * Math.PI * 2;
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  return mesh;
+}
+
+function placeMountain(x, z) {
+  const height = 22 + Math.random() * 38;
+  const radius = height * (0.5 + Math.random() * 0.3);
+  const colors = [0x6b7a8f, 0x7d8ca3, 0x5f7267, 0x8a8577];
+  const mountain = makeMountain(height, radius, colors[Math.floor(Math.random() * colors.length)]);
+  mountain.position.x = x;
+  mountain.position.z = z;
+  scene.add(mountain);
+}
+
+function placeBoundaryRing() {
+  const BOUNDARY_RADIUS = CITY_SIZE + 15; // ring of trees, just past the paved city
+  const MOUNTAIN_RADIUS = CITY_SIZE + 35; // sparser, taller mountains further back
+  const FAR = 400; // covers the rest of the 480x480 ground plane
+
+  // Block movement past the ring entirely — four strips covering the grass
+  // beyond it on each side — instead of just decorating the edge and
+  // leaving it walkable.
+  colliders.push({ minX: -FAR, maxX: FAR, minZ: BOUNDARY_RADIUS, maxZ: FAR });
+  colliders.push({ minX: -FAR, maxX: FAR, minZ: -FAR, maxZ: -BOUNDARY_RADIUS });
+  colliders.push({ minX: BOUNDARY_RADIUS, maxX: FAR, minZ: -FAR, maxZ: FAR });
+  colliders.push({ minX: -FAR, maxX: -BOUNDARY_RADIUS, minZ: -FAR, maxZ: FAR });
+
+  const TREE_RING_SCALE = TREE_SCALE * 1.6;
+  for (let along = -BOUNDARY_RADIUS; along <= BOUNDARY_RADIUS; along += 14) {
+    const jitter = (Math.random() - 0.5) * 4;
+    const file = TREE_FILES[Math.floor(Math.random() * TREE_FILES.length)];
+    placeTree(file, along + jitter, BOUNDARY_RADIUS + Math.random() * 4, TREE_RING_SCALE);
+    placeTree(file, along + jitter, -(BOUNDARY_RADIUS + Math.random() * 4), TREE_RING_SCALE);
+    placeTree(file, BOUNDARY_RADIUS + Math.random() * 4, along + jitter, TREE_RING_SCALE);
+    placeTree(file, -(BOUNDARY_RADIUS + Math.random() * 4), along + jitter, TREE_RING_SCALE);
+  }
+
+  for (let along = -MOUNTAIN_RADIUS; along <= MOUNTAIN_RADIUS; along += 26) {
+    const jitter = (Math.random() - 0.5) * 10;
+    placeMountain(along + jitter, MOUNTAIN_RADIUS + Math.random() * 15);
+    placeMountain(along + jitter, -(MOUNTAIN_RADIUS + Math.random() * 15));
+    placeMountain(MOUNTAIN_RADIUS + Math.random() * 15, along + jitter);
+    placeMountain(-(MOUNTAIN_RADIUS + Math.random() * 15), along + jitter);
+  }
 }
 
 function placeBench(x, z, facingRotY) {
@@ -546,9 +604,11 @@ async function buildCity() {
   furnishSidewalk('x', -1);
 
   [1, -1].forEach((sx) => [1, -1].forEach((sz) => sealQuadrantInterior(sx, sz)));
+  placeBoundaryRing();
 
   placeParkedCars();
   initPickups();
+  spawnPedestrians();
 
   resolveCityReady();
 }
@@ -636,6 +696,77 @@ function placeParkedCars() {
       if (Math.random() < 0.4) continue;
       addParked(sx * laneOffset, z, 'z', 0);
     }
+  });
+}
+
+// --- Pedestrians ---
+// Simple procedural walkers that patrol the same four sidewalk strips
+// furnishSidewalk() decorates, looping from one end to the other like the
+// moving cars do. Purely cosmetic background life — no collision with the
+// player, traffic, or each other.
+const PEDESTRIAN_COLORS = [0x3a6ea5, 0xd1495b, 0x8a5a44, 0x4a7c59, 0x9b59b6, 0xe0a458, 0x2f2f2f, 0xdedede];
+function makePedestrian(shirtColor) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(
+    new THREE.CapsuleGeometry(0.22, 0.55, 4, 8),
+    new THREE.MeshStandardMaterial({ color: shirtColor })
+  );
+  body.position.y = 0.62;
+  const head = new THREE.Mesh(
+    new THREE.SphereGeometry(0.16, 10, 10),
+    new THREE.MeshStandardMaterial({ color: 0xe8b48c })
+  );
+  head.position.y = 1.15;
+  g.add(body, head);
+  g.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+  return g;
+}
+
+// Same four sidewalk strips as furnishSidewalk(): 'axis' is which street
+// the strip faces (so pedestrians walk along the OTHER axis), 'cross' is
+// the fixed offset from the road centerline.
+const PEDESTRIAN_LANES = [
+  { axis: 'z', cross: STREET_HALF_WIDTH + 1.6 },
+  { axis: 'z', cross: -(STREET_HALF_WIDTH + 1.6) },
+  { axis: 'x', cross: STREET_HALF_WIDTH + 1.6 },
+  { axis: 'x', cross: -(STREET_HALF_WIDTH + 1.6) },
+];
+const PEDESTRIAN_RANGE = CITY_SIZE - 10; // matches furnishSidewalk's placement range
+const pedestrians = []; // { mesh, lane, dir, speed, walkCycle }
+
+function spawnPedestrians(perLane = 3) {
+  PEDESTRIAN_LANES.forEach((lane) => {
+    for (let i = 0; i < perLane; i++) {
+      const mesh = makePedestrian(PEDESTRIAN_COLORS[Math.floor(Math.random() * PEDESTRIAN_COLORS.length)]);
+      const along = -PEDESTRIAN_RANGE + Math.random() * PEDESTRIAN_RANGE * 2;
+      const dir = Math.random() < 0.5 ? 1 : -1;
+      if (lane.axis === 'z') mesh.position.set(along, 0, lane.cross);
+      else mesh.position.set(lane.cross, 0, along);
+      scene.add(mesh);
+      pedestrians.push({ mesh, lane, dir, speed: 1.1 + Math.random() * 0.9, walkCycle: Math.random() * Math.PI * 2 });
+    }
+  });
+}
+
+function updatePedestrians(delta) {
+  pedestrians.forEach((p) => {
+    const moveDist = p.dir * p.speed * delta;
+    if (p.lane.axis === 'z') p.mesh.position.x += moveDist;
+    else p.mesh.position.z += moveDist;
+
+    // Loop from one end of the sidewalk to the other, like the moving cars.
+    const along = p.lane.axis === 'z' ? p.mesh.position.x : p.mesh.position.z;
+    if (along > PEDESTRIAN_RANGE) {
+      if (p.lane.axis === 'z') p.mesh.position.x = -PEDESTRIAN_RANGE; else p.mesh.position.z = -PEDESTRIAN_RANGE;
+    } else if (along < -PEDESTRIAN_RANGE) {
+      if (p.lane.axis === 'z') p.mesh.position.x = PEDESTRIAN_RANGE; else p.mesh.position.z = PEDESTRIAN_RANGE;
+    }
+
+    const forward = p.lane.axis === 'z' ? new THREE.Vector3(p.dir, 0, 0) : new THREE.Vector3(0, 0, p.dir);
+    p.mesh.rotation.y = Math.atan2(forward.x, forward.z);
+
+    p.walkCycle += delta * 7;
+    p.mesh.position.y = Math.abs(Math.sin(p.walkCycle)) * 0.05;
   });
 }
 
@@ -2023,6 +2154,7 @@ function animate() {
   if (mixer) mixer.update(delta);
   npcMixers.forEach((m) => m.update(delta));
   updateTraffic(delta);
+  updatePedestrians(delta);
   updateMoneyParticles(delta);
   updateRunningAwayNpcs(delta);
   if (gameState === 'playing') {
