@@ -917,7 +917,7 @@ function beginQuestIntro(id) {
   const q = quests[id];
   if (!q || q.state !== 'available' || gameState !== 'playing' || !character) return;
   pendingQuestId = id;
-  const portraitModel = id === 'findJulie' ? npc : id === 'findGloria' ? gloria : id === 'reportReceipts' ? makeReceipt() : null;
+  const portraitModel = id === 'findJulie' ? npcPortraitSource : id === 'findGloria' ? gloriaPortraitSource : id === 'reportReceipts' ? makeReceipt() : null;
   beginDialogCutscene(character, q.title, q.description, portraitModel, 'accept', null);
 }
 
@@ -990,13 +990,22 @@ function loadNPC(path, targetHeight = 1.8) {
         const box2 = new THREE.Box3().setFromObject(m);
         m.position.y -= box2.min.y;
 
+        // A pristine, never-animated clone taken right after load (before
+        // any mixer advances) — portraits always render from this instead
+        // of the live `m`, otherwise an idle/look-around clip can leave the
+        // head bone turned away from the portrait camera at whatever random
+        // moment the dialog happens to open, making the face intermittently
+        // disappear behind hair for reasons that have nothing to do with
+        // the deliberate rotationY framing.
+        const portraitSource = cloneSkinned(m);
+
         const mixers = [];
         if (gltf.animations && gltf.animations.length > 0) {
           const mx = new THREE.AnimationMixer(m);
           mx.clipAction(gltf.animations[0]).play();
           mixers.push(mx);
         }
-        resolve({ model: m, mixers });
+        resolve({ model: m, mixers, portraitSource });
       },
       undefined,
       (err) => { console.error('Failed to load NPC model', path, err); resolve(null); }
@@ -1005,18 +1014,20 @@ function loadNPC(path, targetHeight = 1.8) {
 }
 
 let npc = null;
+let npcPortraitSource = null;
 let resolveNpcReady;
 const npcReady = new Promise((resolve) => { resolveNpcReady = resolve; });
 loadNPC('./model/julie.glb').then((res) => {
-  if (res) { npc = res.model; npcMixers.push(...res.mixers); }
+  if (res) { npc = res.model; npcPortraitSource = res.portraitSource; npcMixers.push(...res.mixers); }
   resolveNpcReady();
 });
 
 let gloria = null;
+let gloriaPortraitSource = null;
 let resolveGloriaReady;
 const gloriaReady = new Promise((resolve) => { resolveGloriaReady = resolve; });
 loadNPC('./model/gloria.glb').then((res) => {
-  if (res) { gloria = res.model; npcMixers.push(...res.mixers); }
+  if (res) { gloria = res.model; gloriaPortraitSource = res.portraitSource; npcMixers.push(...res.mixers); }
   resolveGloriaReady();
 });
 
@@ -1307,30 +1318,34 @@ function checkQuestProgress() {
       if (julliePhase === 'seek') {
         julliePhase = null;
         completeQuest('findJulie');
-        // Let her actually run off and disappear first — the "found!"
-        // dialog only pops up once she's gone, instead of covering the
-        // screen right as she starts running.
-        startRunAway(npc, () => {
-          gameState = 'questComplete'; // freezes player/traffic-hit input until confirmed
-          showFoundOverlay('🎉 找到了！', '你成功找到了 Julie，任務完成！', () => addReportQuest());
+        // Show the dialog immediately; she only runs off once the player
+        // dismisses it, not before — same pattern as every other story
+        // beat here, instead of running off underneath the dialog.
+        gameState = 'questComplete'; // freezes player/traffic-hit input until confirmed
+        showFoundOverlay('🎉 找到了！', '你成功找到了 Julie，任務完成！', () => {
+          startRunAway(npc);
+          addReportQuest();
         });
       } else if (julliePhase === 'deliver') {
         julliePhase = null;
         // She turns her back (rotationY = PI, so the portrait shows the
         // back of her head, not her face) while hinting at who to look for
         // next — Gloria's own portrait is shown alongside as a preview.
-        beginDialogCutscene(npc, 'Julie', '誒…還缺少機票的收據耶，這個要找 Gloria 拿！', npc, 'story', () => {
+        // Portraits are cloned from the frozen, never-animated
+        // *PortraitSource references (not the live npc/gloria), so an
+        // idle animation can't leave the head turned away from the camera.
+        beginDialogCutscene(npc, 'Julie', '誒…還缺少機票的收據耶，這個要找 Gloria 拿！', npcPortraitSource, 'story', () => {
           completeQuest('reportReceipts');
           addFindGloriaQuest();
-        }, Math.PI, gloria, 0.4, 'Gloria');
+        }, Math.PI, gloriaPortraitSource, 0.4, 'Gloria');
       } else if (julliePhase === 'awaitReturn') {
         julliePhase = 'done';
-        beginDialogCutscene(npc, 'Julie', '太好了，謝謝你！這是給你的獎勵！', npc, 'story', () => {
+        beginDialogCutscene(npc, 'Julie', '太好了，謝謝你！這是給你的獎勵！', npcPortraitSource, 'story', () => {
           completeQuest('returnToJulie');
           addMoney(50000);
           triggerMoneyRain();
           startRunAway(npc);
-        });
+        }, 0.4);
       }
     }
   }
@@ -1339,7 +1354,7 @@ function checkQuestProgress() {
     const dz = character.position.z - gloria.position.z;
     if (Math.hypot(dx, dz) < FOUND_DISTANCE) {
       gloriaPhase = null;
-      beginDialogCutscene(gloria, 'Gloria', '這是機票收據，快拿去給 Julie 吧！', gloria, 'story', () => {
+      beginDialogCutscene(gloria, 'Gloria', '這是機票收據，快拿去給 Julie 吧！', gloriaPortraitSource, 'story', () => {
         completeQuest('findGloria');
         hasTicket = true;
         startRunAway(gloria);
